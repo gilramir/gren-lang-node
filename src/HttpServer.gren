@@ -303,6 +303,7 @@ arrayPairs a =
 dictFromPairs : Array (Array String) -> Dict String String
 dictFromPairs pairs =
     let
+        mapper : Array String -> Dict String String -> Dict String String
         mapper p dict =
             when p is
                 [a, b] ->

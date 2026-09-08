@@ -1,7 +1,7 @@
 /*
 
 import Basics exposing (never)
-import Dict exposing (empty, set)
+import Dict exposing (fromStringPairs)
 import Task exposing (perform)
 import Gren.Kernel.Platform exposing (export)
 import Gren.Kernel.Scheduler exposing (binding, succeed, rawSpawn)
@@ -155,11 +155,14 @@ var _Node_attachSignalTerminateListener = function (selfMsg) {
 // Helpers
 
 function _Node_objToDict(obj) {
-  var dict = __Dict_empty;
+  // `Dict.set` takes an `Ord` witness before its key now, so kernel code cannot
+  // call it (`docs/m1b-classes.md` §G29). `Dict.fromStringPairs` is resolved at
+  // `String` and takes only the pairs.
+  var pairs = [];
 
   for (var key in obj) {
-    dict = A3(__Dict_set, key, obj[key], dict);
+    pairs.push({ __$key: key, __$value: obj[key] });
   }
 
-  return dict;
+  return __Dict_fromStringPairs(pairs);
 }

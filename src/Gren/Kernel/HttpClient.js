@@ -6,7 +6,7 @@ import HttpClient exposing (BadUrl, Timeout, BadStatus, BadHeaders, UnexpectedRe
 import Json.Decode as Decode exposing (decodeValue, errorToString)
 import Result exposing (isOk)
 import Maybe exposing (isJust)
-import Dict exposing (empty, set, foldl)
+import Dict exposing (fromStringPairs, foldl)
 import Platform exposing (sendToApp)
 
 */
@@ -337,10 +337,12 @@ var _HttpClient_CustomAbortError = new Error();
 var _HttpClient_CustomTimeoutError = new Error();
 
 var _HttpClient_formatResponseLegacy = function (res, data) {
-  let headerDict = __Dict_empty;
+  // See `_Node_objToDict`: a constrained binding is not callable from here.
+  let headerPairs = [];
   for (const [key, value] of Object.entries(res.headersDistinct)) {
-    headerDict = A3(__Dict_set, key.toLowerCase(), value, headerDict);
+    headerPairs.push({ __$key: key.toLowerCase(), __$value: value });
   }
+  let headerDict = __Dict_fromStringPairs(headerPairs);
 
   return {
     __$statusCode: res.statusCode,
@@ -351,11 +353,12 @@ var _HttpClient_formatResponseLegacy = function (res, data) {
 };
 
 var _HttpClient_formatResponse = function (res, data) {
-  let headerDict = __Dict_empty;
+  let headerPairs = [];
 
   for (const [key, value] of res.headers.entries()) {
-    headerDict = A3(__Dict_set, key.toLowerCase(), value, headerDict);
+    headerPairs.push({ __$key: key.toLowerCase(), __$value: value });
   }
+  let headerDict = __Dict_fromStringPairs(headerPairs);
 
   return {
     __$statusCode: res.status,
