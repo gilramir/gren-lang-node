@@ -704,11 +704,6 @@ onEffects router subs state =
         flipFold fn array initial =
             Array.foldl fn initial array
 
-        taskStopper :
-            (String -> String)
-            -> String
-            -> Task.Task Never (Dict String Process.Id)
-            -> Task.Task Never (Dict String Process.Id)
         taskStopper keyMapper =
             (\key accTask ->
                 Task.andThen 
@@ -728,12 +723,6 @@ onEffects router subs state =
                     accTask
             )
 
-        taskSpawner :
-            (String -> String)
-            -> Bool
-            -> String
-            -> Task.Task Never (Dict String Process.Id)
-            -> Task.Task Never (Dict String Process.Id)
         taskSpawner keyMapper isRecursive =
             (\key accTask ->
                 accTask
