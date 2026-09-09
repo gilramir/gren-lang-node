@@ -38,6 +38,7 @@ import Internal.Init
 
 {-| The permission for performing commands specified in this module.
 -}
+@derive(Eq)
 type Permission
     = Permission
 
