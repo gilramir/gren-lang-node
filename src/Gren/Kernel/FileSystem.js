@@ -57,7 +57,9 @@ var _FileSystem_readFromOffset = F2(function (fh, options) {
       ? bufferNs.constants.MAX_LENGTH
       : options.__$length;
 
-  var fileOffset = options.__$offset < 0 ? 0 : options.__$offset;
+  // `Number` because the arithmetic below it is a Number's; the offset is an
+  // `Int64` in Gren, so a `BigInt` here (D74).
+  var fileOffset = options.__$offset < 0 ? 0 : Number(options.__$offset);
 
   return __Scheduler_binding(function (callback) {
     var initialBufferSize =
@@ -132,14 +134,23 @@ var _FileSystem_readHelper = function (
   );
 };
 
-var _FileSystem_writeFromOffset = F3(function (fh, options, bytes) {
+var _FileSystem_writeFromOffset = F3(function (fh, offset, bytes) {
   return __Scheduler_binding(function (callback) {
+    // The second argument is the offset itself -- `writeFromOffset` takes an
+    // `Int64`, not a record. This used to read `options.__$offset` off it,
+    // which is `undefined` for a number, so every write landed at the handle's
+    // current position and the offset was silently ignored. Reported upstream
+    // as docs/upstream/node-writefromoffset-ignores-its-offset.md.
+    //
+    // `Number` because `fs.write`'s `position` is a Number and
+    // `_FileSystem_writeHelper` adds to it as it loops; an offset past 2^53 is
+    // nine petabytes into a file.
     _FileSystem_writeHelper(
       fh,
       bytes,
       0,
       bytes.byteLength,
-      options.__$offset,
+      Number(offset),
       callback,
     );
   });
@@ -319,7 +330,8 @@ var _FileSystem_fstat = function (fd) {
 
 var _FileSystem_ftruncate = F2(function (len, fd) {
   return __Scheduler_binding(function (callback) {
-    fs.ftruncate(fd.__$fd, len, function (err) {
+    // `len` is an `Int64`, so a `BigInt` (D74); `fs.ftruncate` wants a Number.
+    fs.ftruncate(fd.__$fd, Number(len), function (err) {
       if (err) {
         callback(__Scheduler_fail(_FileSystem_constructError(fd.__$path, err)));
       } else {
@@ -331,7 +343,7 @@ var _FileSystem_ftruncate = F2(function (len, fd) {
 
 var _FileSystem_futimes = F3(function (atime, mtime, fd) {
   return __Scheduler_binding(function (callback) {
-    fs.futimes(fd.__$fd, atime, mtime, function (err) {
+    fs.futimes(fd.__$fd, Number(atime), Number(mtime), function (err) {
       if (err) {
         callback(__Scheduler_fail(_FileSystem_constructError(fd.__$path, err)));
       } else {
@@ -597,24 +609,28 @@ var _FileSystem_lstat = function (path) {
 };
 
 var _FileSystem_statToGrenRecord = function (stats) {
+  // `byteSize`, `blocks` and every `Posix` are `Int64` in Gren
+  // (`int64-migration.md` M5), which D74 makes a `BigInt` here. `blockSize`,
+  // `deviceID`, `userID` and `groupID` stay `Int` and stay Numbers.
   return {
     __$entityType: _FileSystem_toEntityType(stats),
     __$blockSize: stats.blksize,
-    __$blocks: stats.blocks,
-    __$byteSize: stats.size,
-    __$created: __Time_millisToPosix(Math.floor(stats.birthtimeMs)),
+    __$blocks: BigInt(stats.blocks),
+    __$byteSize: BigInt(stats.size),
+    __$created: __Time_millisToPosix(BigInt(Math.floor(stats.birthtimeMs))),
     __$deviceID: stats.dev,
     __$groupID: stats.gid,
-    __$lastAccessed: __Time_millisToPosix(Math.floor(stats.atimeMs)),
-    __$lastChanged: __Time_millisToPosix(Math.floor(stats.ctimeMs)),
-    __$lastModified: __Time_millisToPosix(Math.floor(stats.mtimeMs)),
+    __$lastAccessed: __Time_millisToPosix(BigInt(Math.floor(stats.atimeMs))),
+    __$lastChanged: __Time_millisToPosix(BigInt(Math.floor(stats.ctimeMs))),
+    __$lastModified: __Time_millisToPosix(BigInt(Math.floor(stats.mtimeMs))),
     __$userID: stats.uid,
   };
 };
 
 var _FileSystem_truncate = F2(function (len, path) {
   return __Scheduler_binding(function (callback) {
-    fs.truncate(__FilePath_toString(path), len, function (err) {
+    // `len` is an `Int64`, so a `BigInt` (D74); `fs.truncate` wants a Number.
+    fs.truncate(__FilePath_toString(path), Number(len), function (err) {
       if (err) {
         callback(__Scheduler_fail(_FileSystem_constructError(path, err)));
       } else {
@@ -626,7 +642,9 @@ var _FileSystem_truncate = F2(function (len, path) {
 
 var _FileSystem_utimes = F3(function (atime, mtime, path) {
   return __Scheduler_binding(function (callback) {
-    fs.utimes(__FilePath_toString(path), atime, mtime, function (err) {
+    // Seconds since the epoch, as `Int64`s (`Time.posixToMillis // 1000`), so
+    // `BigInt`s here; `fs.utimes` wants Numbers.
+    fs.utimes(__FilePath_toString(path), Number(atime), Number(mtime), function (err) {
       if (err) {
         callback(__Scheduler_fail(_FileSystem_constructError(path, err)));
       } else {
@@ -638,7 +656,7 @@ var _FileSystem_utimes = F3(function (atime, mtime, path) {
 
 var _FileSystem_lutimes = F3(function (atime, mtime, path) {
   return __Scheduler_binding(function (callback) {
-    fs.lutimes(__FilePath_toString(path), atime, mtime, function (err) {
+    fs.lutimes(__FilePath_toString(path), Number(atime), Number(mtime), function (err) {
       if (err) {
         callback(__Scheduler_fail(_FileSystem_constructError(path, err)));
       } else {

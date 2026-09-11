@@ -156,7 +156,10 @@ var _Sqlite_executeMany = F3(function (statement, values, db) {
 
       const result = {
         __$changes: lastResult.changes,
-        __$lastInsertRowid: lastResult.lastInsertRowid,
+        // An `Int64` in Gren since `int64-migration.md` M5, and D74 makes that
+        // a `BigInt` here. node:sqlite hands back a Number unless the driver is
+        // in BigInt mode, so the conversion is done rather than assumed.
+        __$lastInsertRowid: BigInt(lastResult.lastInsertRowid),
       };
 
       callback(__Scheduler_succeed(result));

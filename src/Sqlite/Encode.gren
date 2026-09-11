@@ -30,6 +30,7 @@ You will typically use these in the `parameters` field. For example:
 
 -}
 
+import Int64
 import Json.Encode
 import Time
 
@@ -128,7 +129,7 @@ time : String -> Time.Posix -> Value
 time field t =
     Value
         { key = field
-        , value = Json.Encode.int (Time.posixToMillis t // 1000)
+        , value = Json.Encode.int (Int64.toInt (Time.posixToMillis t // 1000))
         }
 
 
@@ -146,7 +147,7 @@ timeWithMillis : String -> Time.Posix -> Value
 timeWithMillis field t =
     Value
         { key = field
-        , value = Json.Encode.float (toFloat (Time.posixToMillis t) / 1000.0)
+        , value = Json.Encode.float (Int64.toFloat (Time.posixToMillis t) / 1000.0)
         }
 
 

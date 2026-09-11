@@ -50,8 +50,8 @@ For example:
 
 -}
 
+import Int64
 import Json.Decode
-import Math
 import Time
 
 
@@ -158,7 +158,7 @@ time : String -> (Time.Posix -> Decoder a) -> Decoder a
 time fieldName cont =
     fieldHelper fieldName
         (Json.Decode.map
-            (\seconds -> Time.millisToPosix (Math.round (seconds * 1000.0)))
+            (\seconds -> Time.millisToPosix (Int64.round (seconds * 1000.0)))
             Json.Decode.float
         )
         cont

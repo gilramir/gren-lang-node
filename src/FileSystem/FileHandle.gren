@@ -249,8 +249,13 @@ read fh =
 
 
 {-| Read `length` number of bytes from a file, starting at `offset` bytes.
+
+The offset is an `Int64` and the length is an `Int`, and the difference is
+`docs/int64-migration.md` M1's rule: a position in something outside the process
+has the file's width, and a count of bytes about to be held in memory has
+memory's.
 -}
-readFromOffset : ReadableFileHandle a -> { offset : Int, length : Int } -> Task FileSystem.Error Bytes
+readFromOffset : ReadableFileHandle a -> { offset : Int64, length : Int } -> Task FileSystem.Error Bytes
 readFromOffset =
     Gren.Kernel.FileSystem.readFromOffset
 
@@ -267,7 +272,7 @@ write fh bytes =
 
 {-| Write bytes into a specific location of a file.
 -}
-writeFromOffset : WriteableFileHandle a -> Int -> Bytes -> Task FileSystem.Error (WriteableFileHandle a)
+writeFromOffset : WriteableFileHandle a -> Int64 -> Bytes -> Task FileSystem.Error (WriteableFileHandle a)
 writeFromOffset =
     Gren.Kernel.FileSystem.writeFromOffset
 
@@ -276,7 +281,7 @@ writeFromOffset =
 are discarded. If the file is smaller than the given size, zeroes will be added until it is of the given
 size.
 -}
-truncate : Int -> WriteableFileHandle a -> Task FileSystem.Error (WriteableFileHandle a)
+truncate : Int64 -> WriteableFileHandle a -> Task FileSystem.Error (WriteableFileHandle a)
 truncate =
     Gren.Kernel.FileSystem.ftruncate
 

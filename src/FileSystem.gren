@@ -258,15 +258,20 @@ errorIsIO (Error { code }) =
 
 
 {-| Represents extra information about an entity in the file system.
+
+`byteSize` and `blocks` are `Int64` (`docs/int64-migration.md` M5): a file is
+allowed to be larger than 2 GB, and a file size is the thing D2's rule --
+"the size, offset or position of something outside the process is an `Int64`"
+-- was written about. `blockSize` is a device constant and stays an `Int`.
 -}
 type alias Metadata =
     { entityType : EntityType
     , deviceID : Int
     , userID : Int
     , groupID : Int
-    , byteSize : Int
+    , byteSize : Int64
     , blockSize : Int
-    , blocks : Int
+    , blocks : Int64
     , lastAccessed : Time.Posix
     , lastModified : Time.Posix
     , lastChanged : Time.Posix
@@ -515,7 +520,7 @@ writeFileStream _ behaviour path =
 the given length, zeroes is added to the file until it is the correct length. If the file
 is larger than the given length, the excess bytes are removed.
 -}
-truncateFile : Permission -> Int -> Path -> Task Error Path
+truncateFile : Permission -> Int64 -> Path -> Task Error Path
 truncateFile _ length path =
     Gren.Kernel.FileSystem.truncate length path
 
