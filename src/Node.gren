@@ -131,7 +131,11 @@ getPlatform =
 
 platformFromString : String -> Platform
 platformFromString platform =
-    when String.toLower platform is
+    -- Node documents `process.platform` as one of a fixed set of lowercase
+    -- strings, so this matches it as written. It used to call `String.toLower`,
+    -- which put the Unicode case-mapping table in every node program for the
+    -- sake of an ASCII word (`docs/m1b-str.md` §T24).
+    when platform is
         "win32" ->
             Win32
 
@@ -183,7 +187,11 @@ getCpuArchitecture =
 
 archFromString : String -> CpuArchitecture
 archFromString arch =
-    when String.toLower arch is
+    -- Node documents `process.arch` as one of a fixed set of lowercase
+    -- strings, so this matches it as written. It used to call `String.toLower`,
+    -- which put the Unicode case-mapping table in every node program for the
+    -- sake of an ASCII word (`docs/m1b-str.md` §T24).
+    when arch is
         "arm" ->
             Arm
 
