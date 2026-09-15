@@ -39,7 +39,6 @@ module FileSystem.Path exposing
 
 
 import Task exposing (Task)
-import Gren.Kernel.FilePath
 
 
 {-| A cross-platform representation of a filesystem path.
@@ -75,28 +74,56 @@ empty =
 -}
 fromPosixString : String -> Path
 fromPosixString =
-    Gren.Kernel.FilePath.fromPosix
+    fromPosixWith build
 
 
 {-| String representation of a [Path](#Path) for Posix systems.
 -}
 toPosixString : Path -> String
-toPosixString =
-    Gren.Kernel.FilePath.toPosix
+toPosixString path =
+    toPosixParts path.root path.directory path.filename path.extension
 
 
 {-| Build a [Path](#Path) from a `String`. The `String` should represent a Windows-compatible path.
 -}
 fromWin32String : String -> Path
 fromWin32String =
-    Gren.Kernel.FilePath.fromWin32
+    fromWin32With build
 
 
 {-| `String` representation of a [Path](#Path) for Windows.
 -}
 toWin32String : Path -> String
-toWin32String =
-    Gren.Kernel.FilePath.toWin32
+toWin32String path =
+    toWin32Parts path.root path.directory path.filename path.extension
+
+
+-- EXTERNS
+
+
+build : String -> Array String -> String -> String -> Path
+build root directory filename extension =
+    { root = root
+    , directory = directory
+    , filename = filename
+    , extension = extension
+    }
+
+
+@externPure(js, "FilePath", "fromPosix")
+fromPosixWith : (String -> Array String -> String -> String -> path) -> String -> path
+
+
+@externPure(js, "FilePath", "fromWin32")
+fromWin32With : (String -> Array String -> String -> String -> path) -> String -> path
+
+
+@externPure(js, "FilePath", "toPosix")
+toPosixParts : String -> Array String -> String -> String -> String
+
+
+@externPure(js, "FilePath", "toWin32")
+toWin32Parts : String -> Array String -> String -> String -> String
 
 
 {-| Return the filename and file extension for a [Path](#Path).

@@ -1,27 +1,11 @@
 /*
 
-import Gren.Kernel.Scheduler exposing (binding, succeed, fail, rawSpawn)
-import HttpServer exposing (ServerError, toRequest)
+import Gren.Kernel.Scheduler exposing (rawSpawn)
+import HttpServer exposing (toRequest)
 import HttpServer.Response as Response exposing (toResponse)
 import Platform exposing (sendToApp, sendToSelf)
 
 */
-
-var _HttpServer_createServer = F2(function (host, port) {
-  return __Scheduler_binding(function (callback) {
-    const server = require("http").createServer();
-    server.on("error", function (e) {
-      callback(
-        __Scheduler_fail(
-          __HttpServer_ServerError({ __$code: e.code, __$message: e.message }),
-        ),
-      );
-    });
-    server.listen(port, host, function () {
-      callback(__Scheduler_succeed(server));
-    });
-  });
-});
 
 var _HttpServer_addListener = F3(function (server, router, msg) {
   server.on("request", function (request, response) {

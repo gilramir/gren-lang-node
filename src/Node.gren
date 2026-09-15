@@ -94,18 +94,24 @@ type alias Environment =
 
 initializeEnvironment : Task Never Environment
 initializeEnvironment =
-    Gren.Kernel.Node.init
-        |> Task.map
-                (\raw ->
-                    { platform = platformFromString raw.platform
-                    , cpuArchitecture = archFromString raw.arch
-                    , applicationPath = raw.applicationPath
-                    , args = raw.args
-                    , stdout = raw.stdout
-                    , stderr = raw.stderr
-                    , stdin = raw.stdin
-                    }
-                )
+    initWith
+        (\applicationPath platform arch args stdout stderr stdin ->
+            { platform = platformFromString platform
+            , cpuArchitecture = archFromString arch
+            , applicationPath =
+                -- The kernel read it with node's own `path`, which is `win32`'s
+                -- on Windows and `posix`'s everywhere else.
+                if platform == "win32" then
+                    FileSystem.Path.fromWin32String applicationPath
+
+                else
+                    FileSystem.Path.fromPosixString applicationPath
+            , args = args
+            , stdout = stdout
+            , stderr = stderr
+            , stdin = stdin
+            }
+        )
 
 
 {-| The platform, or operating system, that your application is running on.
@@ -125,7 +131,7 @@ type Platform
 -}
 getPlatform : Task x Platform
 getPlatform =
-    Gren.Kernel.Node.getPlatform
+    getPlatformExtern
         |> Task.map platformFromString
 
 
@@ -181,7 +187,7 @@ type CpuArchitecture
 -}
 getCpuArchitecture : Task x CpuArchitecture
 getCpuArchitecture =
-    Gren.Kernel.Node.getCpuArchitecture
+    getCpuArchitectureExtern
         |> Task.map archFromString
 
 
@@ -230,7 +236,11 @@ archFromString arch =
 -}
 getEnvironmentVariables : Task x (Dict String String)
 getEnvironmentVariables =
-    Gren.Kernel.Node.getEnvironmentVariables
+    getEnvironmentVariablesWith
+        (\keys values ->
+            Array.map2 (\key value -> { key = key, value = value }) keys values
+                |> Dict.fromStringPairs
+        )
 
 
 -- PROGRAMS
@@ -415,7 +425,7 @@ due to an error, -1 is a good option.
 -}
 exitWithCode : Int -> Cmd msg
 exitWithCode code =
-    Gren.Kernel.Node.exitWithCode code
+    Task.perform never (exitWithCodeExtern code)
 
 
 {-| Set the error code that the program will return once it finishes.
@@ -426,7 +436,34 @@ the program will only exit once there are no ongoing tasks.
 -}
 setExitCode : Int -> Task x {}
 setExitCode code =
-    Gren.Kernel.Node.setExitCode code
+    setExitCodeExtern code
+
+
+-- EXTERNS
+
+
+@extern(js, "Node", "init")
+initWith : (String -> String -> String -> Array String -> stdout -> stderr -> stdin -> environment) -> Task x environment
+
+
+@extern(js, "Node", "getPlatform")
+getPlatformExtern : Task x String
+
+
+@extern(js, "Node", "getCpuArchitecture")
+getCpuArchitectureExtern : Task x String
+
+
+@extern(js, "Node", "getEnvironmentVariables")
+getEnvironmentVariablesWith : (Array String -> Array String -> environment) -> Task x environment
+
+
+@extern(js, "Node", "exitWithCode")
+exitWithCodeExtern : Int -> Task x a
+
+
+@extern(js, "Node", "setExitCode")
+setExitCodeExtern : Int -> Task x {}
 
 
 -- SUBSCRIPTIONS

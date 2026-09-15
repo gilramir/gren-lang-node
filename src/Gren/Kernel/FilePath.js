@@ -5,14 +5,6 @@
 var path = require("node:path");
 var process = require("node:process");
 
-var _FilePath_fromPosix = function (str) {
-  return _FilePath_parse(path.posix, str);
-};
-
-var _FilePath_fromWin32 = function (str) {
-  return _FilePath_parse(path.win32, str);
-};
-
 var _FilePath_fromString = function (str) {
   return _FilePath_parse(path, str);
 };

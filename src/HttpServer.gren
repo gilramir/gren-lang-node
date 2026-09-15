@@ -45,6 +45,7 @@ See [HttpServer.Response](HttpServer.Response) for more details on responding to
 import Bytes exposing (Bytes)
 import Bytes.Decode as Decode
 import Dict exposing (Dict)
+import Extern exposing (Handle)
 import Init
 import Internal.Init
 import Json.Encode
@@ -69,8 +70,7 @@ type Permission
 {-| The HTTP server.
 -}
 type Server
-    -- Note: Actual implementation in Kernel code
-    = Server
+    = Server Handle
 
 
 {-| Error code and message from node.
@@ -94,7 +94,22 @@ initialize =
 -}
 createServer : Permission -> { host : String, port_ : Int } -> Task ServerError Server
 createServer _ options =
-    Gren.Kernel.HttpServer.createServer options.host options.port_
+    createServerWith (\code message -> ServerError { code = code, message = message }) options.host options.port_
+        |> Task.map Server
+
+
+{-| The node server inside a `Server`, which is what the kernel's listener code
+is handed. A one-field constructor is its field only under `--optimize`; in a
+development build it is a tagged record, so the handle is taken out here rather
+than trusted to be the value.
+-}
+serverHandle : Server -> Handle
+serverHandle (Server handle) =
+    handle
+
+
+@extern(js, "HttpServer", "createServer")
+createServerWith : (String -> String -> error) -> String -> Int -> Task error Handle
 
 
 -- REQUESTS
@@ -348,14 +363,14 @@ onEffects router subs state =
             state
                 |> Array.map
                     (\(OnRequestSub { server }) ->
-                        Gren.Kernel.HttpServer.removeAllListeners server
+                        Gren.Kernel.HttpServer.removeAllListeners (serverHandle server)
                     )
         
         _addListeners =
             subs
                 |> Array.map
                     (\(OnRequestSub { server, requestHandler }) ->
-                        Gren.Kernel.HttpServer.addListener server router requestHandler
+                        Gren.Kernel.HttpServer.addListener (serverHandle server) router requestHandler
                     )
     in
     Task.succeed subs

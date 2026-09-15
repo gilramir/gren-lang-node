@@ -71,7 +71,7 @@ can happen in CI-setups or when used as part of a unix pipe.
 -}
 initialize : Init.Task (Maybe Configuration)
 initialize =
-    Gren.Kernel.Terminal.init
+    initWith (\isTTY colorDepth columns rows -> { isTTY = isTTY, colorDepth = colorDepth, columns = columns, rows = rows })
         |> Task.map (\raw ->
             if raw.isTTY then
                 Just
@@ -99,7 +99,7 @@ Enable this when you need full control over how input is handled.
 -}
 setStdInRawMode : Permission -> Bool -> Task x {}
 setStdInRawMode _ toggle =
-    Gren.Kernel.Terminal.setStdInRawMode toggle
+    setStdInRawModeExtern toggle
 
 
 {-| Set the title of the running process. This will usually display in
@@ -107,7 +107,22 @@ activity monitors or in the title bar of your terminal emulator.
 -}
 setProcessTitle : Permission -> String -> Task x {}
 setProcessTitle _ title =
-    Gren.Kernel.Terminal.setProcessTitle title
+    setProcessTitleExtern title
+
+
+-- EXTERNS
+
+
+@extern(js, "Terminal", "init")
+initWith : (Bool -> Int -> Int -> Int -> raw) -> Task x raw
+
+
+@extern(js, "Terminal", "setStdInRawMode")
+setStdInRawModeExtern : Bool -> Task x {}
+
+
+@extern(js, "Terminal", "setProcessTitle")
+setProcessTitleExtern : String -> Task x {}
 
 
 -- SUBSCRIPTIONS
