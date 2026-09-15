@@ -1,11 +1,7 @@
 /*
 
 import Gren.Kernel.Scheduler exposing (binding, succeed, fail, rawSpawn)
-import Gren.Kernel.Json exposing (wrap)
-import HttpClient exposing (BadUrl, Timeout, BadStatus, BadHeaders, UnexpectedResponseBody, UnknownError, SentChunk, ReceivedChunk, Error, Aborted, Done)
-import Json.Decode as Decode exposing (decodeValue, errorToString)
-import Result exposing (isOk)
-import Maybe exposing (isJust)
+import HttpClient exposing (BadUrl, Timeout, BadHeaders, UnknownError, SentChunk, ReceivedChunk, Error, Aborted, Done)
 import Dict exposing (fromStringPairs, foldl)
 import Platform exposing (sendToApp)
 
@@ -18,135 +14,6 @@ function _HttpClient_clientForProtocol(config) {
 
   return require("node:https");
 }
-
-var _HttpClient_request = function (config) {
-  return __Scheduler_binding(function (cb) {
-    const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort("ERR_TIMEOUT"),
-      config.__$timeout,
-    );
-
-    // This makes sure a left over setTimeout don't cause the process to hang in node.
-    function callback(val) {
-      clearTimeout(timeout);
-      cb(val);
-    }
-
-    fetch(config.__$url, {
-      method: config.__$method,
-      headers: A3(
-        __Dict_foldl,
-        _HttpClient_dictToObject,
-        {},
-        config.__$headers,
-      ),
-      duplex: "half",
-      body: _HttpClient_extractRequestBody(config),
-      signal: controller.signal,
-    })
-      .then((res) => {
-        if (!res.ok) {
-          return res.arrayBuffer().then((b) => {
-            return callback(
-              __Scheduler_fail(
-                __HttpClient_BadStatus(
-                  _HttpClient_formatResponse(res, new DataView(b)),
-                ),
-              ),
-            );
-          });
-        }
-
-        switch (config.__$expectType) {
-          case "NOTHING":
-            return res.blob().then((b) => {
-              if (b.size === 0) {
-                return callback(
-                  __Scheduler_succeed(_HttpClient_formatResponse(res, {})),
-                );
-              } else {
-                return callback(
-                  __Scheduler_fail(
-                    __HttpClient_UnexpectedResponseBody(
-                      "Received response body where I expected none.",
-                    ),
-                  ),
-                );
-              }
-            });
-          case "ANYTHING":
-            return callback(
-              __Scheduler_succeed(_HttpClient_formatResponse(res, {})),
-            );
-
-          case "STRING":
-            return res.text().then((t) => {
-              return callback(
-                __Scheduler_succeed(_HttpClient_formatResponse(res, t)),
-              );
-            });
-
-          case "JSON":
-            return res.json().then((t) => {
-              const jsonResult = A2(
-                __Decode_decodeValue,
-                config.__$expect.a,
-                _Json_wrap(t),
-              );
-              if (__Result_isOk(jsonResult)) {
-                return callback(
-                  __Scheduler_succeed(
-                    _HttpClient_formatResponse(res, jsonResult.a),
-                  ),
-                );
-              } else {
-                return callback(
-                  __Scheduler_fail(
-                    __HttpClient_UnexpectedResponseBody(
-                      __Decode_errorToString(jsonResult.a),
-                    ),
-                  ),
-                );
-              }
-            });
-
-          case "BYTES":
-            return res.arrayBuffer().then((b) => {
-              return callback(
-                __Scheduler_succeed(
-                  _HttpClient_formatResponse(res, new DataView(b)),
-                ),
-              );
-            });
-
-          case "STREAM":
-            return callback(
-              __Scheduler_succeed(_HttpClient_formatResponse(res, res.body)),
-            );
-        }
-      })
-      .catch((e) => {
-        if (controller.signal.reason === "ERR_TIMEOUT") {
-          return callback(__Scheduler_fail(__HttpClient_Timeout));
-        } else if (e.code === "ERR_INVALID_HTTP_TOKEN") {
-          return callback(__Scheduler_fail(__HttpClient_BadHeaders));
-        } else if (e.code === "ERR_INVALID_URL") {
-          return callback(__Scheduler_fail(__HttpClient_BadUrl(config.__$url)));
-        } else {
-          return callback(
-            __Scheduler_fail(
-              __HttpClient_UnknownError("problem with request: " + e.message),
-            ),
-          );
-        }
-      });
-
-    return () => {
-      controller.abort();
-    };
-  });
-};
 
 var _HttpClient_stream = F4(function (cleanup, sendToApp, request, config) {
   return __Scheduler_binding(function (callback) {
@@ -347,22 +214,6 @@ var _HttpClient_formatResponseLegacy = function (res, data) {
   return {
     __$statusCode: res.statusCode,
     __$statusText: res.statusMessage,
-    __$headers: headerDict,
-    __$data: data,
-  };
-};
-
-var _HttpClient_formatResponse = function (res, data) {
-  let headerPairs = [];
-
-  for (const [key, value] of res.headers.entries()) {
-    headerPairs.push({ __$key: key.toLowerCase(), __$value: value });
-  }
-  let headerDict = __Dict_fromStringPairs(headerPairs);
-
-  return {
-    __$statusCode: res.status,
-    __$statusText: res.statusText,
     __$headers: headerDict,
     __$data: data,
   };

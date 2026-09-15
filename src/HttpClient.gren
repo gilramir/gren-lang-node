@@ -458,7 +458,187 @@ send
     -> RequestConfiguration expectedBody
     -> Task Error (Response expectedBody)
 send permission config =
-    Gren.Kernel.HttpClient.request (kernelRequestConfig permission config)
+    let
+        kernel =
+            kernelRequestConfig permission config
+
+        run expectType makeResponse bodyStream =
+            { expectType = expectType
+            , makeResponse = makeResponse
+            , makeBadStatus = \status statusText names values bytes -> BadStatus (responseFromHost status statusText names values bytes)
+            , makeError = errorFromHost
+            , method = kernel.method
+            , url = kernel.url
+            , headerNames = Dict.keys kernel.headers
+            , headerValues = Dict.values kernel.headers
+            , bodyType = kernel.bodyType
+            , bodyText =
+                when config.body is
+                    BodyString text ->
+                        text
+
+                    _ ->
+                        ""
+            , bodyBytes =
+                when config.body is
+                    BodyBytes bytes ->
+                        bytes
+
+                    _ ->
+                        Bytes.empty
+            , bodyStream = bodyStream
+            , timeout = kernel.timeout
+            }
+
+        withBody : (Stream.Readable Bytes -> Task Error r) -> ({} -> Task Error r) -> Task Error r
+        withBody streaming other =
+            when config.body is
+                BodyStream readable ->
+                    streaming readable
+
+                _ ->
+                    other {}
+    in
+    -- `Expect a` says which `a` a response carries only by which constructor
+    -- it is, and a `when` on it cannot tell the type checker so. Each branch
+    -- builds the response at the type its extern knows and hands it on as
+    -- `Response a` through `believe`, which is the one place that is taken on
+    -- trust (m1b-extern.md §H16.5). The kernel did the same without saying so.
+    when config.expect is
+        ExpectNothing ->
+            withBody (\b -> sendNone (run "NOTHING" noBody b)) (\b -> sendNone (run "NOTHING" noBody b))
+                |> Task.map believe
+
+        ExpectAnything ->
+            withBody (\b -> sendNone (run "ANYTHING" noBody b)) (\b -> sendNone (run "ANYTHING" noBody b))
+                |> Task.map believe
+
+        ExpectString ->
+            withBody (\b -> sendText (run "STRING" responseFromHost b)) (\b -> sendText (run "STRING" responseFromHost b))
+                |> Task.map believe
+
+        ExpectJson decoder ->
+            withBody (\b -> sendText (run "JSON" responseFromHost b)) (\b -> sendText (run "JSON" responseFromHost b))
+                |> Task.andThen
+                    (\response ->
+                        when Json.Decode.decodeString decoder response.data is
+                            Ok data ->
+                                Task.succeed
+                                    { statusCode = response.statusCode
+                                    , statusText = response.statusText
+                                    , headers = response.headers
+                                    , data = data
+                                    }
+
+                            Err error ->
+                                Task.fail (UnexpectedResponseBody (Json.Decode.errorToString error))
+                    )
+
+        ExpectBytes ->
+            withBody (\b -> sendBytes (run "BYTES" responseFromHost b)) (\b -> sendBytes (run "BYTES" responseFromHost b))
+                |> Task.map believe
+
+        ExpectStream ->
+            withBody (\b -> sendStream (run "STREAM" responseFromHost b)) (\b -> sendStream (run "STREAM" responseFromHost b))
+                |> Task.map believe
+
+
+type alias HostRequest builder stream =
+    { expectType : String
+    , makeResponse : builder
+    , makeBadStatus : Int -> String -> Array String -> Array (Array String) -> Bytes -> Error
+    , makeError : String -> String -> Error
+    , method : String
+    , url : String
+    , headerNames : Array String
+    , headerValues : Array (Array String)
+    , bodyType : String
+    , bodyText : String
+    , bodyBytes : Bytes
+    , bodyStream : stream
+    , timeout : Int
+    }
+
+
+responseFromHost : Int -> String -> Array String -> Array (Array String) -> body -> Response body
+responseFromHost status statusText names values body =
+    { statusCode = status
+    , statusText = statusText
+    , headers =
+        Array.map2 (\name value -> { key = name, value = value }) names values
+            |> Dict.fromStringPairs
+    , data = body
+    }
+
+
+{-| A response with no body to carry. The implementation passes it one more
+argument, `{}`, which a `{}` parameter could not declare (D203) and this ignores.
+-}
+noBody : Int -> String -> Array String -> Array (Array String) -> Response {}
+noBody status statusText names values =
+    responseFromHost status statusText names values {}
+
+
+errorFromHost : String -> String -> Error
+errorFromHost kind detail =
+    when kind is
+        "TIMEOUT" ->
+            Timeout
+
+        "BAD_HEADERS" ->
+            BadHeaders
+
+        "BAD_URL" ->
+            BadUrl detail
+
+        "UNEXPECTED_BODY" ->
+            UnexpectedResponseBody detail
+
+        _ ->
+            UnknownError detail
+
+
+sendNone : HostRequest (Int -> String -> Array String -> Array (Array String) -> Response {}) stream -> Task Error (Response {})
+sendNone r =
+    requestNone r.expectType r.makeResponse r.makeBadStatus r.makeError r.method r.url r.headerNames r.headerValues r.bodyType r.bodyText r.bodyBytes r.bodyStream r.timeout
+
+
+sendText : HostRequest (Int -> String -> Array String -> Array (Array String) -> String -> Response String) stream -> Task Error (Response String)
+sendText r =
+    requestText r.expectType r.makeResponse r.makeBadStatus r.makeError r.method r.url r.headerNames r.headerValues r.bodyType r.bodyText r.bodyBytes r.bodyStream r.timeout
+
+
+sendBytes : HostRequest (Int -> String -> Array String -> Array (Array String) -> Bytes -> Response Bytes) stream -> Task Error (Response Bytes)
+sendBytes r =
+    requestBytes r.expectType r.makeResponse r.makeBadStatus r.makeError r.method r.url r.headerNames r.headerValues r.bodyType r.bodyText r.bodyBytes r.bodyStream r.timeout
+
+
+sendStream : HostRequest (Int -> String -> Array String -> Array (Array String) -> Stream.Readable Bytes -> Response (Stream.Readable Bytes)) stream -> Task Error (Response (Stream.Readable Bytes))
+sendStream r =
+    requestStream r.expectType r.makeResponse r.makeBadStatus r.makeError r.method r.url r.headerNames r.headerValues r.bodyType r.bodyText r.bodyBytes r.bodyStream r.timeout
+
+
+{-| The identity, at any type. Only `send` uses it, and only to hand on a
+response whose body type its `Expect` constructor has already fixed.
+-}
+@externPure(js, "HttpClient", "believe")
+believe : x -> y
+
+
+@extern(js, "HttpClient", "request")
+requestNone : String -> (Int -> String -> Array String -> Array (Array String) -> response) -> (Int -> String -> Array String -> Array (Array String) -> Bytes -> error) -> (String -> String -> error) -> String -> String -> Array String -> Array (Array String) -> String -> String -> Bytes -> stream -> Int -> Task error response
+
+
+@extern(js, "HttpClient", "request")
+requestText : String -> (Int -> String -> Array String -> Array (Array String) -> String -> response) -> (Int -> String -> Array String -> Array (Array String) -> Bytes -> error) -> (String -> String -> error) -> String -> String -> Array String -> Array (Array String) -> String -> String -> Bytes -> stream -> Int -> Task error response
+
+
+@extern(js, "HttpClient", "request")
+requestBytes : String -> (Int -> String -> Array String -> Array (Array String) -> Bytes -> response) -> (Int -> String -> Array String -> Array (Array String) -> Bytes -> error) -> (String -> String -> error) -> String -> String -> Array String -> Array (Array String) -> String -> String -> Bytes -> stream -> Int -> Task error response
+
+
+@extern(js, "HttpClient", "request")
+requestStream : String -> (Int -> String -> Array String -> Array (Array String) -> body -> response) -> (Int -> String -> Array String -> Array (Array String) -> Bytes -> error) -> (String -> String -> error) -> String -> String -> Array String -> Array (Array String) -> String -> String -> Bytes -> stream -> Int -> Task error response
 
 
 type alias KernelRequestConfig a =
