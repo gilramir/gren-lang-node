@@ -3,7 +3,7 @@
 import Sqlite exposing (GenericError, ForeignKeyError, UniqueConstraintError, DecodingError, MultipleResultsError)
 import Gren.Kernel.FilePath exposing (toString)
 import Gren.Kernel.Scheduler exposing (binding, succeed, fail)
-import Gren.Kernel.Json exposing (wrap, unwrap)
+import Gren.Kernel.Platform exposing (jsonFromHost, jsonToHost)
 import Json.Decode as Decode exposing (decodeValue)
 import Result exposing (isOk)
 import Sqlite.Encode as SqliteEncode exposing (toJson)
@@ -78,14 +78,14 @@ var _Sqlite_foldl = F4(function (query, db, func, acc) {
     try {
       var acc_ = acc;
       const prepped = db.prepare(query.__$query);
-      const params = __Json_unwrap(__SqliteEncode_toJson(query.__$parameters));
+      const params = __Platform_jsonToHost(__SqliteEncode_toJson(query.__$parameters));
       const rowDecoder = __SqliteDecode_toJson(query.__$rowDecoder);
 
       for (const value of prepped.iterate(params)) {
         const jsonResult = A2(
           __Decode_decodeValue,
           rowDecoder,
-          _Json_wrap(value),
+          __Platform_jsonFromHost(value),
         );
 
         if (__Result_isOk(jsonResult)) {
@@ -107,7 +107,7 @@ var _Sqlite_getMaybeOne = F2(function (query, db) {
   return __Scheduler_binding(function (callback) {
     try {
       const prepped = db.prepare(query.__$query);
-      const params = __Json_unwrap(__SqliteEncode_toJson(query.__$parameters));
+      const params = __Platform_jsonToHost(__SqliteEncode_toJson(query.__$parameters));
       const rowDecoder = __SqliteDecode_toJson(query.__$rowDecoder);
       const iterator = prepped.iterate(params);
 
@@ -125,7 +125,7 @@ var _Sqlite_getMaybeOne = F2(function (query, db) {
         return callback(__Scheduler_fail(__Sqlite_MultipleResultsError(count)));
       }
 
-      const result = A2(__Decode_decodeValue, rowDecoder, _Json_wrap(value));
+      const result = A2(__Decode_decodeValue, rowDecoder, __Platform_jsonFromHost(value));
 
       if (__Result_isOk(result)) {
         callback(__Scheduler_succeed(__Maybe_Just(result.a)));
@@ -149,7 +149,7 @@ var _Sqlite_executeMany = F3(function (statement, values, db) {
       } else {
         for (const val of values) {
           lastResult = prepped.run(
-            __Json_unwrap(__SqliteEncode_toJson(statement.__$parameters(val))),
+            __Platform_jsonToHost(__SqliteEncode_toJson(statement.__$parameters(val))),
           );
         }
       }
