@@ -1,0 +1,91 @@
+// ChildProcess.run as an extern (m1b-extern.md §H8 step 5). `spawn` is its
+// effect manager's and stays kernel code until item 4.
+//
+// The options arrive flattened, since a record does not cross (D192), and the
+// three outcomes are built by the Geng functions passed first.
+
+var process = require("node:process");
+var childProcess = require("node:child_process");
+
+function toBytes(buffer) {
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+}
+
+function run(
+  makeSuccess,
+  makeProgramError,
+  makeInitError,
+  program,
+  args,
+  shellChoice,
+  shellValue,
+  inheritCwd,
+  cwd,
+  envOption,
+  envKeys,
+  envValues,
+  maxBuffer,
+  runDuration,
+  succeed,
+  fail,
+) {
+  var given = {};
+  for (var i = 0; i < envKeys.length; i++) {
+    given[envKeys[i]] = envValues[i];
+  }
+
+  var shell =
+    shellChoice === 0 ? false : shellChoice === 1 ? true : shellValue;
+
+  var cmdOptions = {
+    encoding: "buffer",
+    timeout: runDuration,
+    cwd: inheritCwd ? process.cwd() : cwd,
+    env:
+      envOption === 0
+        ? process.env
+        : envOption === 1
+          ? Object.assign({}, process.env, given)
+          : given,
+    maxBuffer: maxBuffer,
+    shell: shell,
+  };
+
+  function cmdCallback(err, stdout, stderr) {
+    if (err == null) {
+      succeed(makeSuccess(toBytes(stdout), toBytes(stderr)));
+    } else if (typeof err.errno === "undefined") {
+      // errno only exists on system errors, so the program was run. Its exit
+      // code is a number only when it exited: a timeout or a signal leaves
+      // `null`, and too much output leaves the string
+      // ERR_CHILD_PROCESS_STDIO_MAXBUFFER. The kernel passed either on into an
+      // `Int`; -1 is what `spawn` already reports for a process that has no
+      // exit code to give (m1b-extern.md §H16).
+      fail(
+        makeProgramError(
+          typeof err.code === "number" ? err.code : -1,
+          toBytes(stdout),
+          toBytes(stderr),
+        ),
+      );
+    } else {
+      fail(makeInitError(err.path, err.spawnargs, err.code));
+    }
+  }
+
+  var subProc;
+
+  if (shell) {
+    subProc = childProcess.execFile(
+      [program].concat(args).join(" "),
+      cmdOptions,
+      cmdCallback,
+    );
+  } else {
+    subProc = childProcess.execFile(program, args, cmdOptions, cmdCallback);
+  }
+
+  return function () {
+    subProc.kill();
+  };
+}

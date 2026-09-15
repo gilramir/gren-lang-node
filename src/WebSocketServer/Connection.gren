@@ -26,7 +26,7 @@ handle failures explicitly.
 @docs close
 -}
 
-import Gren.Kernel.WebSocketServer
+import Bytes exposing (Bytes)
 import Stream exposing (Readable)
 import Task exposing (Task)
 import WebSocketServer exposing (Connection, Message(..))
@@ -51,7 +51,7 @@ connection closes, and errors if the connection errors (observed as
 -}
 readable : Connection -> Readable Message
 readable connection =
-    Gren.Kernel.WebSocketServer.getReadable connection
+    getReadableExtern connection
 
 
 
@@ -72,10 +72,10 @@ send : Connection -> Message -> Task Error {}
 send connection message =
     when message is
         TextMessage text ->
-            Gren.Kernel.WebSocketServer.send connection text
+            sendExtern makeError connection text
 
         BinaryMessage bytes ->
-            Gren.Kernel.WebSocketServer.sendBytes connection bytes
+            sendBytesExtern makeError connection bytes
 
 
 
@@ -92,7 +92,32 @@ The reason string must not exceed 123 bytes.
 -}
 close : Connection -> Int -> String -> Task Error {}
 close connection code reason =
-    Gren.Kernel.WebSocketServer.close connection code reason
+    closeExtern makeError connection code reason
+
+
+
+-- EXTERNS
+
+
+makeError : String -> String -> Error
+makeError code message =
+    Error { code = code, message = message }
+
+
+@externPure(js, "WebSocketServer", "getReadable")
+getReadableExtern : connection -> readable
+
+
+@extern(js, "WebSocketServer", "send")
+sendExtern : (String -> String -> error) -> connection -> String -> Task error {}
+
+
+@extern(js, "WebSocketServer", "sendBytes")
+sendBytesExtern : (String -> String -> error) -> connection -> Bytes -> Task error {}
+
+
+@extern(js, "WebSocketServer", "close")
+closeExtern : (String -> String -> error) -> connection -> Int -> String -> Task error {}
 
 
 

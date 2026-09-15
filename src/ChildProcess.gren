@@ -180,61 +180,77 @@ type alias SuccessfulRun =
 -}
 run : Permission -> String -> Array String -> RunOptions -> Task FailedRun SuccessfulRun
 run _ program arguments opts =
-    Gren.Kernel.ChildProcess.run
-        { program = program
-        , arguments = arguments
-        , shell =
+    let
+        shell =
             when opts.shell is
                 NoShell ->
-                    { choice = 0
-                    , value = ""
-                    }
+                    { choice = 0, value = "" }
 
                 DefaultShell ->
-                    { choice = 1
-                    , value = ""
-                    }
+                    { choice = 1, value = "" }
 
                 CustomShell value ->
-                    { choice = 2
-                    , value = value
-                    }
-        , workingDirectory =
-             when opts.workingDirectory is
-                 InheritWorkingDirectory -> 
-                    { inherit = True
-                    , override = ""
-                    }
+                    { choice = 2, value = value }
 
-                 SetWorkingDirectory value ->
-                    { inherit = False
-                    , override = value
-                    }
-        , environmentVariables =
+        workingDirectory =
+            when opts.workingDirectory is
+                InheritWorkingDirectory ->
+                    { inherit = True, override = "" }
+
+                SetWorkingDirectory value ->
+                    { inherit = False, override = value }
+
+        environmentVariables =
             when opts.environmentVariables is
-                InheritEnvironmentVariables -> 
-                    { option = 0
-                    , value = Dict.empty
-                    }
-                
+                InheritEnvironmentVariables ->
+                    { option = 0, value = Dict.empty }
+
                 MergeWithEnvironmentVariables value ->
-                    { option = 1
-                    , value = value
-                    }
+                    { option = 1, value = value }
 
                 ReplaceEnvironmentVariables value ->
-                    { option = 2
-                    , value = value
-                    }
-        , maximumBytesWrittenToStreams = opts.maximumBytesWrittenToStreams
-        , runDuration =
-            when opts.runDuration is
-                NoLimit ->
-                    0
+                    { option = 2, value = value }
+    in
+    runWith
+        (\stdout stderr -> { stdout = stdout, stderr = stderr })
+        (\exitCode stdout stderr -> ProgramError { exitCode = exitCode, stdout = stdout, stderr = stderr })
+        (\failedProgram failedArguments errorCode -> InitError { program = failedProgram, arguments = failedArguments, errorCode = errorCode })
+        program
+        arguments
+        shell.choice
+        shell.value
+        workingDirectory.inherit
+        workingDirectory.override
+        environmentVariables.option
+        (Dict.keys environmentVariables.value)
+        (Dict.values environmentVariables.value)
+        opts.maximumBytesWrittenToStreams
+        (when opts.runDuration is
+            NoLimit ->
+                0
 
-                Milliseconds ms -> 
-                    max 0 ms
-        }
+            Milliseconds ms ->
+                max 0 ms
+        )
+
+
+@extern(js, "ChildProcess", "run")
+runWith :
+    (Bytes -> Bytes -> success)
+    -> (Int -> Bytes -> Bytes -> error)
+    -> (String -> Array String -> String -> error)
+    -> String
+    -> Array String
+    -> Int
+    -> String
+    -> Bool
+    -> String
+    -> Int
+    -> Array String
+    -> Array String
+    -> Int
+    -> Int
+    -> Task error success
 
 
 -- SPAWN

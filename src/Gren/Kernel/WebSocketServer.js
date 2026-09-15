@@ -1,33 +1,10 @@
 /*
 
-import Gren.Kernel.Scheduler exposing (binding, succeed, fail, rawSpawn)
-import WebSocketServer exposing (ServerError, TextMessage, BinaryMessage)
-import WebSocketServer.Connection as WsConn exposing (Error)
+import Gren.Kernel.Scheduler exposing (rawSpawn)
+import WebSocketServer exposing (TextMessage, BinaryMessage)
 import Platform exposing (sendToApp)
 
 */
-
-var _WebSocketServer_createServer = F2(function (host, port) {
-  return __Scheduler_binding(function (callback) {
-    var WebSocket = require("ws");
-    var server = new WebSocket.Server({ host: host, port: port });
-
-    server.on("error", function (e) {
-      callback(
-        __Scheduler_fail(
-          __WebSocketServer_ServerError({
-            __$code: e.code || "UNKNOWN",
-            __$message: e.message,
-          }),
-        ),
-      );
-    });
-
-    server.on("listening", function () {
-      callback(__Scheduler_succeed(server));
-    });
-  });
-});
 
 var _WebSocketServer_nextConnectionId = 0;
 
@@ -58,10 +35,12 @@ function _WebSocketServer_ensureListenersAttached(server) {
       },
     });
 
+    // Plain keys, not `__$` fields: the externs in src/Ext/WebSocketServer.js
+    // read these, and --optimize would rename a field under them.
     var connection = {
-      __$id: connId,
-      __$client: client,
-      __$readable: messageStream,
+      id: connId,
+      client: client,
+      readable: messageStream,
     };
 
     // Store the Connection object on the client instance so that close/error
@@ -152,67 +131,4 @@ var _WebSocketServer_setConnectionHandler = F3(
 var _WebSocketServer_setCloseHandler = F3(function (server, router, handler) {
   _WebSocketServer_ensureListenersAttached(server);
   server.__grenCloseHandlers.push({ router: router, handler: handler });
-});
-
-var _WebSocketServer_getConnectionId = function (connection) {
-  return connection.__$id;
-};
-
-var _WebSocketServer_getReadable = function (connection) {
-  return connection.__$readable;
-};
-
-function _WebSocketServer_constructError(err) {
-  return __WsConn_Error({
-    __$code: err.code || "",
-    __$message: err.message || "",
-  });
-}
-
-var _WebSocketServer_send = F2(function (connection, data) {
-  return __Scheduler_binding(function (callback) {
-    try {
-      connection.__$client.send(data, function (err) {
-        if (err) {
-          callback(__Scheduler_fail(_WebSocketServer_constructError(err)));
-        } else {
-          callback(__Scheduler_succeed({}));
-        }
-      });
-    } catch (e) {
-      callback(__Scheduler_fail(_WebSocketServer_constructError(e)));
-    }
-  });
-});
-
-var _WebSocketServer_sendBytes = F2(function (connection, bytes) {
-  return __Scheduler_binding(function (callback) {
-    try {
-      var buffer = Buffer.from(
-        bytes.buffer,
-        bytes.byteOffset,
-        bytes.byteLength,
-      );
-      connection.__$client.send(buffer, function (err) {
-        if (err) {
-          callback(__Scheduler_fail(_WebSocketServer_constructError(err)));
-        } else {
-          callback(__Scheduler_succeed({}));
-        }
-      });
-    } catch (e) {
-      callback(__Scheduler_fail(_WebSocketServer_constructError(e)));
-    }
-  });
-});
-
-var _WebSocketServer_close = F3(function (connection, code, reason) {
-  return __Scheduler_binding(function (callback) {
-    try {
-      connection.__$client.close(code, reason);
-      callback(__Scheduler_succeed({}));
-    } catch (e) {
-      callback(__Scheduler_fail(_WebSocketServer_constructError(e)));
-    }
-  });
 });

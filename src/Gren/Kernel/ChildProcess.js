@@ -1,10 +1,8 @@
 /*
 
-import Gren.Kernel.Scheduler exposing (binding, succeed, fail, rawSpawn)
+import Gren.Kernel.Scheduler exposing (binding, succeed, rawSpawn)
 import Gren.Kernel.Utils exposing (update)
 import Dict exposing (foldl)
-import ChildProcess exposing (InitError, ProgramError)
-import Maybe exposing (Just, Nothing)
 
 */
 
@@ -13,97 +11,6 @@ var stream = require("node:stream");
 
 var _ChildProcess_module = function () {
   return require("node:child_process");
-};
-
-var _ChildProcess_run = function (options) {
-  return __Scheduler_binding(function (callback) {
-    var childProcess = _ChildProcess_module();
-
-    var workingDir = options.__$workingDirectory;
-    var env = options.__$environmentVariables;
-    var shell = options.__$shell;
-
-    var cmdOptions = {
-      encoding: "buffer",
-      timeout: options.__$runDuration,
-      cwd: _ChildProcess_handleCwd(workingDir),
-      env: _ChildProcess_handleEnv(env),
-      timeout: options.__$runDuration,
-      maxBuffer: options.__$maximumBytesWrittenToStreams,
-      shell: _ChildProcess_handleShell(shell),
-    };
-
-    function cmdCallback(err, stdout, stderr) {
-      if (err == null) {
-        callback(
-          __Scheduler_succeed({
-            __$stdout: new DataView(
-              stdout.buffer,
-              stdout.byteOffset,
-              stdout.byteLength,
-            ),
-            __$stderr: new DataView(
-              stderr.buffer,
-              stderr.byteOffset,
-              stderr.byteLength,
-            ),
-          }),
-        );
-      } else {
-        if (typeof err.errno === "undefined") {
-          // errno only exists on system errors, the program was run
-          callback(
-            __Scheduler_fail(
-              __ChildProcess_ProgramError({
-                __$exitCode: err.code,
-                __$stdout: new DataView(
-                  stdout.buffer,
-                  stdout.byteOffset,
-                  stdout.byteLength,
-                ),
-                __$stderr: new DataView(
-                  stderr.buffer,
-                  stderr.byteOffset,
-                  stderr.byteLength,
-                ),
-              }),
-            ),
-          );
-        } else {
-          callback(
-            __Scheduler_fail(
-              __ChildProcess_InitError({
-                __$program: err.path,
-                __$arguments: err.spawnargs,
-                __$errorCode: err.code,
-              }),
-            ),
-          );
-        }
-      }
-    }
-
-    var subProc;
-
-    if (cmdOptions.shell) {
-      subProc = childProcess.execFile(
-        [options.__$program].concat(options.__$arguments).join(" "),
-        cmdOptions,
-        cmdCallback,
-      );
-    } else {
-      subProc = childProcess.execFile(
-        options.__$program,
-        options.__$arguments,
-        cmdOptions,
-        cmdCallback,
-      );
-    }
-
-    return () => {
-      subProc.kill();
-    };
-  });
 };
 
 var _ChildProcess_spawn = F3(function (sendInitToApp, sendExitToApp, options) {
