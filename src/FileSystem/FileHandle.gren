@@ -56,7 +56,7 @@ return an empty path.
 -}
 
 
-import Gren.Kernel.FileSystem
+import Internal.Host exposing (pathToString)
 import Bytes exposing (Bytes)
 import Task exposing (Task)
 import FileSystem.Path exposing (Path)
@@ -75,8 +75,7 @@ The [FileHandle](#FileHandle) type also contains the read and write access permi
 type.
 -}
 type FileHandle readAccess writeAccess
-    -- Note: Actual implementation in kernel code
-    = FileHandle
+    = FileHandle { path : Path, fd : Int }
 
 
 {-| A type that represents the permission to read from a file.
@@ -110,8 +109,8 @@ Comes in handy when you want full access to a file in some parts of your code, b
 of your code.
 -}
 makeReadOnly : ReadWriteableFileHandle -> FileHandle ReadPermission Never
-makeReadOnly =
-    Gren.Kernel.FileSystem.coerce
+makeReadOnly (FileHandle record) =
+    FileHandle record
 
 
 {-| This let's you downgrade a [ReadWriteableFileHandle](#ReadWriteableFileHandle) to a [FileHandle](#FileHandle) that only has write permission.
@@ -120,8 +119,8 @@ Comes in handy when you want full access to a file in some parts of your code, b
 of your code.
 -}
 makeWriteOnly : ReadWriteableFileHandle -> FileHandle Never WritePermission
-makeWriteOnly =
-    Gren.Kernel.FileSystem.coerce
+makeWriteOnly (FileHandle record) =
+    FileHandle record
 
 
 -- OPEN
@@ -175,15 +174,16 @@ openForReadAndWrite _ behaviour path =
 
 
 openImpl : String -> Path -> Task FileSystem.Error (FileHandle a b)
-openImpl =
-    Gren.Kernel.FileSystem.open
+openImpl access path =
+    openExtern (FileSystem.errorAt path) access (pathToString path)
+        |> Task.map (\fd -> FileHandle { path = path, fd = fd })
 
 
 {-| Close a file. All operations performed against the given [FileHandle](#FileHandle) will fail.
 -}
 close : FileHandle a b -> Task FileSystem.Error {}
-close =
-    Gren.Kernel.FileSystem.close
+close (FileHandle { path, fd }) =
+    closeExtern (FileSystem.errorAt path) fd
 
 
 -- METADATA
@@ -191,9 +191,9 @@ close =
 
 {-| Retrieve [Metadata](FileSystem#Metadata) about the file represented by the [FileHandle](#FileHandle).
 -}
-metadata : ReadableFileHandle a -> Task FileSystem.Error (ReadableFileHandle FileSystem.Metadata)
-metadata =
-    Gren.Kernel.FileSystem.fstat
+metadata : ReadableFileHandle a -> Task FileSystem.Error FileSystem.Metadata
+metadata (FileHandle { path, fd }) =
+    fstatExtern FileSystem.metadataFromHost (FileSystem.errorAt path) fd
 
 
 {-| Change how different users can access a file.
@@ -212,14 +212,14 @@ changeAccess permissions fh =
             ++ (String.fromInt <| FileSystem.accessPermissionsToInt permissions.group)
             ++ (String.fromInt <| FileSystem.accessPermissionsToInt permissions.others)
     in
-    Gren.Kernel.FileSystem.fchmod mode fh
+    withHandle fh (\makeError fd -> fchmodExtern makeError mode fd)
 
 
 {-| Change who owns the file. You'll need the ID of the new user and group who will own the file.
 -}
 changeOwner : { userID : Int, groupID : Int } -> WriteableFileHandle a -> Task FileSystem.Error (WriteableFileHandle a)
-changeOwner =
-    Gren.Kernel.FileSystem.fchown
+changeOwner { userID, groupID } fh =
+    withHandle fh (\makeError fd -> fchownExtern makeError userID groupID fd)
 
 
 {-| This will let you set the timestamp for when the file was last accessed, and last modified.
@@ -232,10 +232,13 @@ changeTimes
     -> WriteableFileHandle a
     -> Task FileSystem.Error (WriteableFileHandle a)
 changeTimes { lastAccessed, lastModified } fh =
-    Gren.Kernel.FileSystem.futimes
-        (Time.posixToMillis lastAccessed // 1000)
-        (Time.posixToMillis lastModified // 1000)
-        fh
+    withHandle fh
+        (\makeError fd ->
+            futimesExtern makeError
+                (Time.posixToMillis lastAccessed // 1000)
+                (Time.posixToMillis lastModified // 1000)
+                fd
+        )
 
 
 -- READING
@@ -256,8 +259,8 @@ has the file's width, and a count of bytes about to be held in memory has
 memory's.
 -}
 readFromOffset : ReadableFileHandle a -> { offset : Int64, length : Int } -> Task FileSystem.Error Bytes
-readFromOffset =
-    Gren.Kernel.FileSystem.readFromOffset
+readFromOffset (FileHandle { path, fd }) { offset, length } =
+    readFromOffsetExtern (FileSystem.errorAt path) fd offset length
 
 
 -- WRITING
@@ -273,8 +276,8 @@ write fh bytes =
 {-| Write bytes into a specific location of a file.
 -}
 writeFromOffset : WriteableFileHandle a -> Int64 -> Bytes -> Task FileSystem.Error (WriteableFileHandle a)
-writeFromOffset =
-    Gren.Kernel.FileSystem.writeFromOffset
+writeFromOffset fh offset bytes =
+    withHandle fh (\makeError fd -> writeFromOffsetExtern makeError fd offset bytes)
 
 
 {-| Make sure that a file is of the given size. If the file is larger than the given size, excess bytes
@@ -282,8 +285,8 @@ are discarded. If the file is smaller than the given size, zeroes will be added 
 size.
 -}
 truncate : Int64 -> WriteableFileHandle a -> Task FileSystem.Error (WriteableFileHandle a)
-truncate =
-    Gren.Kernel.FileSystem.ftruncate
+truncate length fh =
+    withHandle fh (\makeError fd -> ftruncateExtern makeError length fd)
 
 
 {-| Usually when you make changes to a file, the changes aren't actually written to disk right away.
@@ -293,8 +296,8 @@ to do so.
 This task, when executed, will force changes to be written to disk.
 -}
 sync : WriteableFileHandle a -> Task FileSystem.Error (WriteableFileHandle a)
-sync =
-    Gren.Kernel.FileSystem.fsync
+sync fh =
+    withHandle fh fsyncExtern
 
 
 {-| Same as [sync](#sync), except it only forces the contents of the file to be written. Changes to a
@@ -302,5 +305,61 @@ file's metadata are not synced. This operation might be a little faster than a f
 of loosing changes to metadata.
 -}
 syncData : WriteableFileHandle a -> Task FileSystem.Error (WriteableFileHandle a)
-syncData =
-    Gren.Kernel.FileSystem.fdatasync
+syncData fh =
+    withHandle fh fdatasyncExtern
+
+
+-- EXTERNS
+
+
+{-| Run an extern on a handle's descriptor, failing with an error about its
+path, and answer the handle itself, as the kernel did.
+-}
+withHandle : FileHandle a b -> ((String -> String -> FileSystem.Error) -> Int -> Task FileSystem.Error {}) -> Task FileSystem.Error (FileHandle a b)
+withHandle ((FileHandle { path, fd }) as fh) run =
+    run (FileSystem.errorAt path) fd
+        |> Task.map (\_ -> fh)
+
+
+@extern(js, "FileSystem", "open")
+openExtern : (String -> String -> error) -> String -> String -> Task error Int
+
+
+@extern(js, "FileSystem", "close")
+closeExtern : (String -> String -> error) -> Int -> Task error {}
+
+
+@extern(js, "FileSystem", "fstat")
+fstatExtern : (Int -> Int -> Int -> Int -> Int64 -> Int -> Int64 -> Int64 -> Int64 -> Int64 -> Int64 -> metadata) -> (String -> String -> error) -> Int -> Task error metadata
+
+
+@extern(js, "FileSystem", "fchmod")
+fchmodExtern : (String -> String -> error) -> String -> Int -> Task error {}
+
+
+@extern(js, "FileSystem", "fchown")
+fchownExtern : (String -> String -> error) -> Int -> Int -> Int -> Task error {}
+
+
+@extern(js, "FileSystem", "futimes")
+futimesExtern : (String -> String -> error) -> Int64 -> Int64 -> Int -> Task error {}
+
+
+@extern(js, "FileSystem", "readFromOffset")
+readFromOffsetExtern : (String -> String -> error) -> Int -> Int64 -> Int -> Task error Bytes
+
+
+@extern(js, "FileSystem", "writeFromOffset")
+writeFromOffsetExtern : (String -> String -> error) -> Int -> Int64 -> Bytes -> Task error {}
+
+
+@extern(js, "FileSystem", "ftruncate")
+ftruncateExtern : (String -> String -> error) -> Int64 -> Int -> Task error {}
+
+
+@extern(js, "FileSystem", "fsync")
+fsyncExtern : (String -> String -> error) -> Int -> Task error {}
+
+
+@extern(js, "FileSystem", "fdatasync")
+fdatasyncExtern : (String -> String -> error) -> Int -> Task error {}

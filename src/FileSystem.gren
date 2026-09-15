@@ -26,6 +26,8 @@ effect module FileSystem where { subscription = FileSystemSub } exposing
     , checkAccess
     , changeAccess
     , accessPermissionsToInt
+    , errorAt
+    , metadataFromHost
     , changeOwner
     , changeTimes
     , move
@@ -100,6 +102,7 @@ effect module FileSystem where { subscription = FileSystemSub } exposing
 
 import Gren.Kernel.FileSystem
 import Gren.Kernel.FilePath
+import Internal.Host exposing (pathToString, pathFromString)
 import Bytes exposing (Bytes)
 import Dict exposing (Dict)
 import Task exposing (Task)
@@ -298,10 +301,10 @@ pointed at by the link.
 metadata : Permission -> { resolveLink : Bool } -> Path -> Task Error Metadata
 metadata _ { resolveLink } path =
     if resolveLink then
-        Gren.Kernel.FileSystem.stat path
+        statExtern metadataFromHost (errorAt path) (pathToString path)
 
     else
-        Gren.Kernel.FileSystem.lstat path
+        lstatExtern metadataFromHost (errorAt path) (pathToString path)
 
 
 {-| Represents the permission to access an entity for a specific operation.
@@ -322,7 +325,13 @@ Passing an empty `Array` will check that the entity exists.
 -}
 checkAccess : Permission -> Array AccessPermission -> Path -> Task Error Path
 checkAccess _ permissions path =
-    Gren.Kernel.FileSystem.access permissions path
+    accessExtern
+        (errorAt path)
+        (Array.member Read permissions)
+        (Array.member Write permissions)
+        (Array.member Execute permissions)
+        (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 {-| Change the access permissions for the entity's owner, group and everyone else.
@@ -342,7 +351,8 @@ changeAccess _ permissions path =
             ++ (String.fromInt <| accessPermissionsToInt permissions.group)
             ++ (String.fromInt <| accessPermissionsToInt permissions.others)
     in
-    Gren.Kernel.FileSystem.chmod mode path
+    chmodExtern (errorAt path) mode (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 {-| The integer representation of a set of access permissions in a posix system.
@@ -371,11 +381,13 @@ not the entity it points to.
 -}
 changeOwner : Permission -> { userID : Int, groupID : Int, resolveLink : Bool } -> Path -> Task Error Path
 changeOwner _ options path =
-    if options.resolveLink then
-        Gren.Kernel.FileSystem.chown options path
+    (if options.resolveLink then
+        chownExtern (errorAt path) options.userID options.groupID (pathToString path)
 
-    else
-        Gren.Kernel.FileSystem.lchown options path
+     else
+        lchownExtern (errorAt path) options.userID options.groupID (pathToString path)
+    )
+        |> Task.map (\_ -> path)
 
 
 {-| Change the registered time (down to the second) an entity was accessed and modified.
@@ -392,11 +404,13 @@ changeTimes _ { lastAccessed, lastModified, resolveLink } path =
         lastModifiedSeconds = 
             Time.posixToMillis lastModified // 1000
     in
-    if resolveLink then
-        Gren.Kernel.FileSystem.utimes lastAccessedSeconds lastModifiedSeconds path
+    (if resolveLink then
+        utimesExtern (errorAt path) lastAccessedSeconds lastModifiedSeconds (pathToString path)
 
-    else
-        Gren.Kernel.FileSystem.lutimes lastAccessedSeconds lastModifiedSeconds path
+     else
+        lutimesExtern (errorAt path) lastAccessedSeconds lastModifiedSeconds (pathToString path)
+    )
+        |> Task.map (\_ -> path)
 
 
 {-| Move the entity represented by the last [Path](FileSystem.Path#Path), to the location
@@ -405,7 +419,8 @@ entity.
 -}
 move : Permission -> Path -> Path -> Task Error Path
 move _ new old =
-    Gren.Kernel.FileSystem.rename old new
+    renameExtern (errorAt new) (pathToString old) (pathToString new)
+        |> Task.map (\_ -> new)
 
 
 {-| If you have a [Path](FileSystem.Path#Path) that is relative to the current directory,
@@ -414,7 +429,8 @@ entity.
 -}
 realPath : Permission -> Path -> Task Error Path
 realPath _ path =
-    Gren.Kernel.FileSystem.realpath path
+    realpathExtern (errorAt path) (pathToString path)
+        |> Task.map pathFromString
 
 
 -- FILES
@@ -424,7 +440,8 @@ realPath _ path =
 -}
 appendToFile : Permission -> Bytes -> Path -> Task Error Path
 appendToFile _ bytes path =
-    Gren.Kernel.FileSystem.appendFile bytes path
+    appendFileExtern (errorAt path) bytes (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 {-| Copy the file represented by the last [Path](FileSystem.Path#Path), to the location
@@ -432,7 +449,8 @@ represented by the first [Path](FileSystem.Path#Path).
 -}
 copyFile : Permission -> Path -> Path -> Task Error Path
 copyFile _ dest src =
-    Gren.Kernel.FileSystem.copyFile src dest
+    copyFileExtern (errorAt dest) (pathToString src) (pathToString dest)
+        |> Task.map (\_ -> dest)
 
 
 {-| Read the entire contents of a file.
@@ -443,7 +461,7 @@ to use [readFileStream](#readFileStream) instead.
 -}
 readFile : Permission -> Path -> Task Error Bytes
 readFile _ path =
-    Gren.Kernel.FileSystem.readFile path
+    readFileExtern (errorAt path) (pathToString path)
 
 
 {-| Specify where in a file you'll start streaming data from.
@@ -474,7 +492,7 @@ readFileStream _ position path =
                 Between r ->
                     r
     in
-    Gren.Kernel.FileSystem.readFileStream range path
+    readFileStreamExtern (errorAt path) range.start range.end (pathToString path)
 
 
 {-| Write the given `Bytes` into a file. The file will be created if it doesn't exist,
@@ -482,7 +500,8 @@ and overwritten if it does.
 -}
 writeFile : Permission -> Bytes -> Path -> Task Error Path
 writeFile _ bytes path =
-    Gren.Kernel.FileSystem.writeFile bytes path
+    writeFileExtern (errorAt path) bytes (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 {-| Specify how the streamed bytes will be entered into the file.
@@ -513,7 +532,7 @@ writeFileStream _ behaviour path =
                 Append ->
                     -1
     in
-    Gren.Kernel.FileSystem.writeFileStream pos path
+    writeFileStreamExtern (errorAt path) pos (pathToString path)
 
 
 {-| Make sure the given file is of a specific length. If the file is smaller than
@@ -522,7 +541,8 @@ is larger than the given length, the excess bytes are removed.
 -}
 truncateFile : Permission -> Int64 -> Path -> Task Error Path
 truncateFile _ length path =
-    Gren.Kernel.FileSystem.truncate length path
+    truncateExtern (errorAt path) length (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 {-| Remove the file or directory at the given path.
@@ -531,7 +551,8 @@ truncateFile _ length path =
 -}
 remove : Permission -> { recursive : Bool } -> Path -> Task Error Path
 remove _ options path =
-    Gren.Kernel.FileSystem.remove options path
+    removeExtern (errorAt path) options.recursive (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 -- DIRECTORIES
@@ -542,7 +563,12 @@ the directory being listed.
 -}
 listDirectory : Permission -> Path -> Task Error (Array { path : Path, entityType : EntityType })
 listDirectory _ path =
-    Gren.Kernel.FileSystem.listDirectory path
+    listDirectoryExtern
+        (\names kinds ->
+            Array.map2 (\name kind -> { path = pathFromString name, entityType = entityTypeFromHost kind }) names kinds
+        )
+        (errorAt path)
+        (pathToString path)
 
 
 {-| Create a new directory at the given [Path](FileSystem.Path#Path).
@@ -552,7 +578,8 @@ given [Path](FileSystem.Path#Path).
 -}
 makeDirectory : Permission -> { recursive : Bool } -> Path -> Task Error Path
 makeDirectory _ options path =
-    Gren.Kernel.FileSystem.makeDirectory options path
+    makeDirectoryExtern (errorAt path) options.recursive (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 {-| Create a directory, prefixed by a given name, that ends up in a section of the
@@ -561,7 +588,8 @@ to this new directory.
 -}
 makeTempDirectory : Permission -> String -> Task Error Path
 makeTempDirectory _ prefix =
-    Gren.Kernel.FileSystem.mkdtemp prefix
+    mkdtempExtern (\template code message -> errorAt (pathFromString template) code message) prefix
+        |> Task.map pathFromString
 
 
 -- LINKS
@@ -576,7 +604,8 @@ the "real" entity and which is the link.
 -}
 hardLink : Permission -> Path -> Path -> Task Error Path
 hardLink _ dest src =
-    Gren.Kernel.FileSystem.link src dest
+    linkExtern (errorAt dest) (pathToString src) (pathToString dest)
+        |> Task.map (\_ -> dest)
 
 
 {-| Creates a soft link from the last [Path](FileSystem.Path#Path) to
@@ -588,14 +617,16 @@ redirect to this other location.
 -}
 softLink : Permission -> Path -> Path -> Task Error Path
 softLink _ dest src =
-    Gren.Kernel.FileSystem.symlink src dest
+    symlinkExtern (errorAt dest) (pathToString src) (pathToString dest)
+        |> Task.map (\_ -> dest)
 
 
 {-| Returns the [Path](FileSystem.Path#Path) pointed to by a soft link.
 -}
 readLink : Permission -> Path -> Task Error Path
 readLink _ path =
-    Gren.Kernel.FileSystem.readLink path
+    readLinkExtern (errorAt path) (pathToString path)
+        |> Task.map pathFromString
 
 
 {-| Removes a link, hard or soft, from the file system. If the
@@ -603,7 +634,8 @@ readLink _ path =
 -}
 unlink : Permission -> Path -> Task Error Path
 unlink _ path =
-    Gren.Kernel.FileSystem.unlink path
+    unlinkExtern (errorAt path) (pathToString path)
+        |> Task.map (\_ -> path)
 
 
 -- SUBSCRIPTION
@@ -819,7 +851,7 @@ onSelfMsg router (WatchPathChange { recursive, key, event }) state =
 -}
 homeDirectory : Permission -> Task x Path
 homeDirectory _ =
-    Gren.Kernel.FileSystem.homeDir
+    Task.map pathFromString homeDirExtern
 
 
 {-| Returns the current working directory of the program.
@@ -829,18 +861,191 @@ directory that the program was executed from.
 -}
 currentWorkingDirectory : Permission -> Task x Path
 currentWorkingDirectory _ =
-    Gren.Kernel.FileSystem.currentWorkingDirectory
+    Task.map pathFromString currentWorkingDirectoryExtern
 
 
 {-| Find a [Path](FileSystem.Path#Path) that represents a directory meant to hold temporary files.
 -}
 tmpDirectory : Permission -> Task x Path
 tmpDirectory _ =
-    Gren.Kernel.FileSystem.tmpDir
+    Task.map pathFromString tmpDirExtern
 
 
 {-| [Path](FileSystem.Path#Path) to a file which is always empty. Anything written to this file will be discarded.
 -}
 devNull : Permission -> Task x Path
 devNull _ =
-    Gren.Kernel.FileSystem.devNull
+    Task.map pathFromString devNullExtern
+
+
+-- EXTERNS
+
+
+{-| An [Error](#Error) about `path`, from node's code and message.
+
+Exposed for [FileSystem.FileHandle](FileSystem.FileHandle), whose externs
+fail with one, as [accessPermissionsToInt](#accessPermissionsToInt) is.
+-}
+errorAt : Path -> String -> String -> Error
+errorAt path code message =
+    Error { path = path, code = code, message = message }
+
+
+{-| [Metadata](#Metadata) from what node's `fs.Stats` holds, the entity type
+as an index and the times as milliseconds.
+
+Exposed for [FileSystem.FileHandle](FileSystem.FileHandle), as
+[errorAt](#errorAt) is.
+-}
+metadataFromHost : Int -> Int -> Int -> Int -> Int64 -> Int -> Int64 -> Int64 -> Int64 -> Int64 -> Int64 -> Metadata
+metadataFromHost kind deviceID userID groupID byteSize blockSize blocks lastAccessed lastModified lastChanged created =
+    { entityType = entityTypeFromHost kind
+    , deviceID = deviceID
+    , userID = userID
+    , groupID = groupID
+    , byteSize = byteSize
+    , blockSize = blockSize
+    , blocks = blocks
+    , lastAccessed = Time.millisToPosix lastAccessed
+    , lastModified = Time.millisToPosix lastModified
+    , lastChanged = Time.millisToPosix lastChanged
+    , created = Time.millisToPosix created
+    }
+
+
+entityTypeFromHost : Int -> EntityType
+entityTypeFromHost kind =
+    when kind is
+        0 ->
+            File
+
+        1 ->
+            Directory
+
+        2 ->
+            Pipe
+
+        3 ->
+            Socket
+
+        4 ->
+            Symlink
+
+        _ ->
+            Device
+
+
+@extern(js, "FileSystem", "stat")
+statExtern : (Int -> Int -> Int -> Int -> Int64 -> Int -> Int64 -> Int64 -> Int64 -> Int64 -> Int64 -> metadata) -> (String -> String -> error) -> String -> Task error metadata
+
+
+@extern(js, "FileSystem", "lstat")
+lstatExtern : (Int -> Int -> Int -> Int -> Int64 -> Int -> Int64 -> Int64 -> Int64 -> Int64 -> Int64 -> metadata) -> (String -> String -> error) -> String -> Task error metadata
+
+
+@extern(js, "FileSystem", "access")
+accessExtern : (String -> String -> error) -> Bool -> Bool -> Bool -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "chmod")
+chmodExtern : (String -> String -> error) -> String -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "chown")
+chownExtern : (String -> String -> error) -> Int -> Int -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "lchown")
+lchownExtern : (String -> String -> error) -> Int -> Int -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "utimes")
+utimesExtern : (String -> String -> error) -> Int64 -> Int64 -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "lutimes")
+lutimesExtern : (String -> String -> error) -> Int64 -> Int64 -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "rename")
+renameExtern : (String -> String -> error) -> String -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "realpath")
+realpathExtern : (String -> String -> error) -> String -> Task error String
+
+
+@extern(js, "FileSystem", "appendFile")
+appendFileExtern : (String -> String -> error) -> Bytes -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "copyFile")
+copyFileExtern : (String -> String -> error) -> String -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "readFile")
+readFileExtern : (String -> String -> error) -> String -> Task error Bytes
+
+
+@extern(js, "FileSystem", "readFileStream")
+readFileStreamExtern : (String -> String -> error) -> Int -> Int -> String -> Task error readable
+
+
+@extern(js, "FileSystem", "writeFile")
+writeFileExtern : (String -> String -> error) -> Bytes -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "writeFileStream")
+writeFileStreamExtern : (String -> String -> error) -> Int -> String -> Task error writable
+
+
+@extern(js, "FileSystem", "truncate")
+truncateExtern : (String -> String -> error) -> Int64 -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "remove")
+removeExtern : (String -> String -> error) -> Bool -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "listDirectory")
+listDirectoryExtern : (Array String -> Array Int -> entries) -> (String -> String -> error) -> String -> Task error entries
+
+
+@extern(js, "FileSystem", "makeDirectory")
+makeDirectoryExtern : (String -> String -> error) -> Bool -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "mkdtemp")
+mkdtempExtern : (String -> String -> String -> error) -> String -> Task error String
+
+
+@extern(js, "FileSystem", "link")
+linkExtern : (String -> String -> error) -> String -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "symlink")
+symlinkExtern : (String -> String -> error) -> String -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "readLink")
+readLinkExtern : (String -> String -> error) -> String -> Task error String
+
+
+@extern(js, "FileSystem", "unlink")
+unlinkExtern : (String -> String -> error) -> String -> Task error {}
+
+
+@extern(js, "FileSystem", "homeDir")
+homeDirExtern : Task x String
+
+
+@extern(js, "FileSystem", "currentWorkingDirectory")
+currentWorkingDirectoryExtern : Task x String
+
+
+@extern(js, "FileSystem", "tmpDir")
+tmpDirExtern : Task x String
+
+
+@extern(js, "FileSystem", "devNull")
+devNullExtern : Task x String

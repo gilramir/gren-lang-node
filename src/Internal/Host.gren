@@ -1,0 +1,30 @@
+module Internal.Host exposing (pathToString, pathFromString)
+
+{-| A `Path` as the string node's `path` module formats and parses, which is
+how a path crosses an extern (`m1b-extern.md` §H16). The kernel used node's
+own `path`, which is `win32`'s on Windows and `posix`'s everywhere else.
+-}
+
+import FileSystem.Path as Path exposing (Path)
+
+
+pathToString : Path -> String
+pathToString path =
+    if isWindows then
+        Path.toWin32String path
+
+    else
+        Path.toPosixString path
+
+
+pathFromString : String -> Path
+pathFromString string =
+    if isWindows then
+        Path.fromWin32String string
+
+    else
+        Path.fromPosixString string
+
+
+@externPure(js, "FileSystem", "isWindows")
+isWindows : Bool
