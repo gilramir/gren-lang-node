@@ -84,8 +84,17 @@ function getEnvironmentVariables(build, succeed, fail) {
   succeed(build(keys, values));
 }
 
+// A write to a pipe is asynchronous on POSIX and `process.exit` drops what is
+// still queued, so both streams are written through first, as core's
+// `_Scheduler_mainEnd` does when `main` completes (m1b-source.md §SO12). The
+// task never completes.
 function exitWithCode(code, succeed, fail) {
-  process.exit(code);
+  process.exitCode = code;
+  process.stdout.write("", function () {
+    process.stderr.write("", function () {
+      process.exit();
+    });
+  });
 }
 
 function setExitCode(code, succeed, fail) {

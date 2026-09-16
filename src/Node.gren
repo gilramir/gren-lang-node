@@ -411,30 +411,34 @@ endSimpleProgramWithCmd cmd =
 -- EXIT
 
 
-{-| Terminate the program immediatly. It will not wait for tasks like http calls
-or file system writes to complete.
+{-| End the program with exit status 0.
 
-This function is equivalent to:
+This is:
 
     exitWithCode 0
 -}
-exit : Cmd msg
+exit : Task x a
 exit =
     exitWithCode 0
 
 
-{-| Terminate the program immediatly. It will not wait for tasks like http calls
-or file system writes, so only use this if you've reached a state where it makes
-no sense to continue.
+{-| End the program with an exit status, without waiting for the rest of it.
 
-The exit code can be read by other processes on your system. Any value other than
-0 is considered an error, but there are no other formal requirements for what
-makes an exit code. If all you want is to signalize that your application exited
-due to an error, -1 is a good option.
+The exit status can be read by other processes on your system. Any value other
+than 0 is considered an error, but there are no other formal requirements for
+what makes an exit status.
+
+The task never completes. Standard output and standard error are written
+through before the program ends, as they are when `main` completes, but
+anything else still running is not waited for: a file being written or a
+request in flight is abandoned.
+
+A program that has only a status to set, and would rather finish what it is
+doing, sets it with [`setExitCode`](#setExitCode) and lets `main` complete.
 -}
-exitWithCode : Int -> Cmd msg
+exitWithCode : Int -> Task x a
 exitWithCode code =
-    Task.perform never (exitWithCodeExtern code)
+    exitWithCodeExtern code
 
 
 {-| Set the error code that the program will return once it finishes.
