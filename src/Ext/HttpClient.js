@@ -1,6 +1,6 @@
-// HttpClient.send as an extern (m1b-extern.md §H8 step 5). The streaming API,
-// `stream`, `sendChunk`, `startReceive` and `abort`, is its effect manager's
-// and stays kernel code until item 4.
+// HttpClient.send as an extern (m1b-extern.md §H8 step 5). The deprecated
+// streaming API, `stream`, `sendChunk`, `startReceive` and `abort`, was its
+// effect manager's and is deleted (m1b-source.md §SO16).
 //
 // One implementation serves four declarations in HttpClient.gren, one per
 // shape of response body: text (for a string or JSON), bytes, a stream, and

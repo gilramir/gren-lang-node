@@ -1,4 +1,4 @@
-effect module ChildProcess where { command = MyCmd } exposing 
+module ChildProcess exposing
     ( Permission
     , initialize
     --
@@ -17,7 +17,12 @@ effect module ChildProcess where { command = MyCmd } exposing
     , StreamIO
     , Connection(..)
     , defaultSpawnOptions
+    , SpawnError
+    , Child
     , spawn
+    , streams
+    , waitForExit
+    , kill
     )
 
 
@@ -36,15 +41,15 @@ This module allow you to spawn child processes.
 
 ## Spawning processes
 
-@docs spawn, SpawnOptions, StreamIO, Connection, defaultSpawnOptions
+@docs spawn, SpawnOptions, Connection, defaultSpawnOptions, SpawnError
+@docs Child, streams, StreamIO, waitForExit, kill
 -}
 
 
-import Gren.Kernel.ChildProcess
 import Bytes exposing (Bytes)
 import Dict exposing (Dict)
+import Extern exposing (Handle)
 import Task exposing (Task)
-import Process
 import Stream
 
 
@@ -263,43 +268,14 @@ runWith :
 * `workingDirectory` specifies the working directory of the process
 * `environmentVariables` specifies the environment variables the process has access to
 * `runDuration` specifies a maximum amount of time a process is allowed to run before exiting
-* `connection` let's you specify how the new process is connected to the application, 
-and which message to receive when the process starts
-* `onExit` is the message that is triggered when the process exits. The message receives the exit code.
+* `connection` lets you specify how the new process is connected to the application
 -}
-type alias SpawnOptions msg =
+type alias SpawnOptions =
     { shell : Shell
     , workingDirectory : WorkingDirectory
     , environmentVariables : EnvironmentVariables
     , runDuration : RunDuration
-    , connection : Connection msg
-    , onExit : Int -> msg
-    }
-
-
-{-| Record expected by spawn kernel call.
--}
-type alias KernelSpawnConfig msg =
-    { program : String
-    , arguments : Array String
-    , shell : 
-        { choice : Int
-        , value : String 
-        }
-    , workingDirectory : 
-        { inherit : Bool
-        , override : String
-        }
-    , environmentVariables :
-        { option : Int
-        , value : Dict String String
-        }
-    , runDuration : Int
-    , connection :
-        { kind : Int
-        , onInit : { processId : Process.Id, streams : StreamIO } -> msg
-        }
-    , onExit : Int -> msg
+    , connection : Connection
     }
 
 
@@ -315,171 +291,185 @@ type alias StreamIO =
 {-| What relation should the newly spawned process have with the running application?
 
 * `Integrated` means that the spawned process shares the stdin, stdout and stderr streams.
-* `External` means that a new streams are created for stdin, stdout and stderr and passed to the application, which can use those streams for communicating with the new process.
+* `External` means that new streams are created for stdin, stdout and stderr, which [streams](#streams) gives the application for communicating with the new process.
 * `Ignored` means the same as `External`, but anything written to stdin, stdout and stderr is discarded/ignored.
 * `Detached` means the same as `Ignored`, but that the application will exit even if the child process hasn't finished executing.
 -}
-type Connection msg
-    = Integrated (Process.Id -> msg)
-    | External ({ processId : Process.Id, streams : StreamIO } -> msg)
-    | Ignored (Process.Id -> msg)
-    | Detached (Process.Id -> msg)
+type Connection
+    = Integrated
+    | External
+    | Ignored
+    | Detached
 
 
 {-| A nice default set of options for the [spawn](#spawn) function.
 -}
-defaultSpawnOptions : Connection msg -> (Int -> msg) -> SpawnOptions msg
-defaultSpawnOptions connection onExit =
+defaultSpawnOptions : Connection -> SpawnOptions
+defaultSpawnOptions connection =
     { shell = DefaultShell
     , workingDirectory = InheritWorkingDirectory
     , environmentVariables = InheritEnvironmentVariables
     , runDuration = NoLimit
     , connection = connection
-    , onExit = onExit
     }
+
+
+{-| Why a process could not be started: the program and arguments that were
+given, and node's error code, like `ENOENT` for a program that does not exist.
+
+A program that starts and then fails is not a `SpawnError`: it has an exit code,
+which [waitForExit](#waitForExit) gives.
+-}
+type alias SpawnError =
+    { program : String
+    , arguments : Array String
+    , errorCode : String
+    }
+
+
+{-| A running, or finished, child process.
+-}
+type Child
+    = Child
+        { handle : Handle
+        , streams : Maybe StreamIO
+        }
 
 
 {-| Spawn a process with a given name, arguments and options, and let it run in the background.
 This is mostly helpful for starting long-running processes.
 
-    spawn permission "tail" [ "my_file" ] mySpawnOptions
+The task completes once the process has started, and fails if it could not be.
+
+    spawn permission "tail" [ "my_file" ] (defaultSpawnOptions External)
 
 -}
-spawn : Permission -> String -> Array String -> SpawnOptions msg -> Cmd msg
+spawn : Permission -> String -> Array String -> SpawnOptions -> Task SpawnError Child
 spawn _ program arguments opts =
-    command <| Spawn <| kernelSpawnConfig program arguments opts
+    let
+        shell =
+            when opts.shell is
+                NoShell ->
+                    { choice = 0, value = "" }
 
+                DefaultShell ->
+                    { choice = 1, value = "" }
 
-kernelSpawnConfig : String -> Array String -> SpawnOptions msg -> KernelSpawnConfig msg
-kernelSpawnConfig program arguments opts =
-    { program = program
-    , arguments = arguments
-    , shell =
-        when opts.shell is
-            NoShell ->
-                { choice = 0
-                , value = ""
-                }
+                CustomShell value ->
+                    { choice = 2, value = value }
 
-            DefaultShell ->
-                { choice = 1
-                , value = ""
-                }
+        workingDirectory =
+            when opts.workingDirectory is
+                InheritWorkingDirectory ->
+                    { inherit = True, override = "" }
 
-            CustomShell value ->
-                { choice = 2
-                , value = value
-                }
-    , workingDirectory =
-         when opts.workingDirectory is
-             InheritWorkingDirectory -> 
-                { inherit = True
-                , override = ""
-                }
+                SetWorkingDirectory value ->
+                    { inherit = False, override = value }
 
-             SetWorkingDirectory value ->
-                { inherit = False
-                , override = value
-                }
-    , environmentVariables =
-        when opts.environmentVariables is
-            InheritEnvironmentVariables -> 
-                { option = 0
-                , value = Dict.empty
-                }
-        
-            MergeWithEnvironmentVariables value ->
-                { option = 1
-                , value = value
-                }
+        environmentVariables =
+            when opts.environmentVariables is
+                InheritEnvironmentVariables ->
+                    { option = 0, value = Dict.empty }
 
-            ReplaceEnvironmentVariables value ->
-                { option = 2
-                , value = value
+                MergeWithEnvironmentVariables value ->
+                    { option = 1, value = value }
+
+                ReplaceEnvironmentVariables value ->
+                    { option = 2, value = value }
+
+        connection =
+            when opts.connection is
+                Integrated ->
+                    0
+
+                External ->
+                    1
+
+                Ignored ->
+                    2
+
+                Detached ->
+                    3
+    in
+    spawnWith
+        (\handle hasStreams input output error ->
+            Child
+                { handle = handle
+                , streams =
+                    if hasStreams then
+                        Just { input = input, output = output, error = error }
+
+                    else
+                        Nothing
                 }
-    , runDuration =
-        when opts.runDuration is
+        )
+        (\failedProgram failedArguments errorCode -> { program = failedProgram, arguments = failedArguments, errorCode = errorCode })
+        program
+        arguments
+        shell.choice
+        shell.value
+        workingDirectory.inherit
+        workingDirectory.override
+        environmentVariables.option
+        (Dict.keys environmentVariables.value)
+        (Dict.values environmentVariables.value)
+        (when opts.runDuration is
             NoLimit ->
                 0
 
-            Milliseconds ms -> 
+            Milliseconds ms ->
                 max 0 ms
-    , connection =
-        when opts.connection is
-            Integrated toMsg ->
-                { kind = 0
-                , onInit = (\{ processId } -> toMsg processId)
-                }
-
-            External toMsg ->
-                { kind = 1
-                , onInit = toMsg
-                }
-            
-            Ignored toMsg ->
-                { kind = 2
-                , onInit = (\{ processId } -> toMsg processId)
-                }
-
-            Detached toMsg ->
-                { kind = 3
-                , onInit = (\{ processId } -> toMsg processId)
-                }
-    , onExit = opts.onExit
-    }
+        )
+        connection
 
 
-mapKernelSpawnConfig : (msg -> msg2) -> KernelSpawnConfig msg -> KernelSpawnConfig msg2
-mapKernelSpawnConfig mapper config =
-    { program = config.program
-    , arguments = config.arguments
-    , shell = config.shell
-    , workingDirectory = config.workingDirectory
-    , environmentVariables = config.environmentVariables
-    , runDuration = config.runDuration
-    , connection =
-        { kind = config.connection.kind
-        , onInit = mapper << config.connection.onInit
-        }
-    , onExit = mapper << config.onExit
-    }
-
--- COMMANDS
+{-| The streams connected to a process spawned with `External`, and `Nothing`
+for any other connection.
+-}
+streams : Child -> Maybe StreamIO
+streams (Child child) =
+    child.streams
 
 
-type MyCmd msg
-    = Spawn (KernelSpawnConfig msg)
+{-| Wait for a process to exit, and answer its exit code. A process that has
+already exited answers at once, and waiting twice answers the same code. A
+process that ends without an exit code of its own, because a signal ended it or
+it ran past its `runDuration`, answers -1, as [run](#run) does.
+-}
+waitForExit : Child -> Task x Int
+waitForExit (Child child) =
+    waitForExitWith child.handle
 
 
-cmdMap : (a -> b) -> MyCmd a -> MyCmd b
-cmdMap func cmd =
-    when cmd is
-        Spawn config ->
-            Spawn <| mapKernelSpawnConfig func config
+{-| Ask a process to terminate, with node's default signal. A process that has
+already exited is not an error.
+-}
+kill : Child -> Task x {}
+kill (Child child) =
+    killWith child.handle
 
 
-init : Task Never {}
-init =
-    Task.succeed {}
+@extern(js, "ChildProcess", "spawn")
+spawnWith :
+    (Handle -> Bool -> input -> output -> error -> child)
+    -> (String -> Array String -> String -> failure)
+    -> String
+    -> Array String
+    -> Int
+    -> String
+    -> Bool
+    -> String
+    -> Int
+    -> Array String
+    -> Array String
+    -> Int
+    -> Int
+    -> Task failure child
 
 
-onEffects : Platform.Router msg Never -> Array (MyCmd msg) -> {} -> Task Never {}
-onEffects router commands state =
-  when Array.popFirst commands is
-    Nothing ->
-      Task.succeed state
-
-    Just { first, rest } ->
-        when first is
-            Spawn config ->
-                Gren.Kernel.ChildProcess.spawn
-                    (Platform.sendToApp router << config.connection.onInit)
-                    (Platform.sendToApp router << config.onExit)
-                    config
-                    |> Task.andThen
-                        (\_ -> onEffects router rest {})
+@extern(js, "ChildProcess", "waitForExit")
+waitForExitWith : Handle -> Task x Int
 
 
-onSelfMsg : Platform.Router msg Never -> Never -> {} -> Task Never {}
-onSelfMsg _ _ _ =
-    Task.succeed {}
+@extern(js, "ChildProcess", "kill")
+killWith : Handle -> Task x {}

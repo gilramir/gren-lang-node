@@ -1,4 +1,4 @@
-effect module HttpClient where { command = MyCmd } exposing
+module HttpClient exposing
     ( Permission
     , initialize, initializeForHost
     , RequestConfiguration, get, post, request
@@ -9,7 +9,6 @@ effect module HttpClient where { command = MyCmd } exposing
     , send
     , Response
     , Error(..), errorToString
-    , StreamRequest, StreamEvent(..), stream, sendChunk, startReceive, abort
     )
 
 
@@ -18,9 +17,9 @@ effect module HttpClient where { command = MyCmd } exposing
 A module for communicating over HTTP.
 
 You start by building a [RequestConfiguration](#RequestConfiguration) type, which represents the request you'll make to a server. Once done,
-you can either do a `send`, which represents the response as a `Task`, or `stream` which will allow you to perform
-actions while the request is sending and while the response is coming in. A typical example of why you'd use `stream`
-is to show a progress bar to the user, or decode the response incrementally as opposed to all at once.
+you do a `send`, which represents the response as a `Task`. To send or receive a body a piece at a time, for instance
+to show a progress bar or to decode a response incrementally, use [withStreamBody](#withStreamBody) and
+[expectStream](#expectStream).
 
 ## Initialization
 
@@ -76,15 +75,6 @@ Once your `Response` is configured, you'll want to actually send the request.
 
 @docs Error, errorToString
 
-## Streaming
-
-**DEPRECATED** - this api will be removed in the next major version, prefer using the newer [withStreamBody](#withStreamBody) and [expectStream](#expectStream) for streaming requests.
-
-Streaming is the more advanced way to perform a HTTP request. This requires that you follow the Elm
-architecture, as you'll receive messages for every chunk of data sent and received. The benefit of this
-extra complexity, is that you can perform actions while the request is being performed.
-
-@docs StreamRequest, StreamEvent, stream, sendChunk, startReceive, abort
 
 -}
 
@@ -94,8 +84,6 @@ import Json.Encode as Json
 import Json.Decode
 import Bytes exposing (Bytes)
 import Task exposing (Task)
-import Platform
-import Gren.Kernel.HttpClient
 import HttpServer exposing (Method(..), methodToString)
 import Stream
 
@@ -734,205 +722,3 @@ errorToString err =
 
         UnknownError debugStr ->
             "Unknown error: " ++ debugStr
-
-
--- STREAM
-
-
-{-| Identifies a streaming request. Required to perform certain operations while
-the request is streaming.
--}
-type StreamRequest =
-    StreamRequest Int
-
-
-{-| When a request is streaming, the application is notified of important events
-and is required to act on those events for the request to be successful.
-
-* SentChunk: The initial request body, or the last piece of data sent with [sendChunk](#sendChunk) has been sent.
-Send more data, or call `startReceive` to begin listening for the response.
-* ReceivedChunk: The server has responded with some data. More data might be coming in, though.
-The `Done` event will be triggered when there's no more data coming. You can use the provided
-`Response` object to access the response headers, and decide if you'd like to [abort](#abort) the
-request or not.
-* Error: Something went wrong. More information in the provided [Error](#Error) object.
-* Aborted: You called [abort](#abort) on this request.
-* Done: The server has sent all it's going to send. You're done.
--}
-type StreamEvent
-    = SentChunk StreamRequest
-    | ReceivedChunk { request : StreamRequest, response : (Response Bytes) }
-    | Error Error
-    | Aborted
-    | Done
-
-
-{-| Initialize a streaming request. You need to provide a function that generates a message
-for handling [StreamEvent](#StreamEvent)s. The headers and data will be sent to the server
-immedietly, and a `SentChunk` event will be sent they're done.
-
-To tell different requests apart, you can use a partially applied custom type like this:
-
-    type Msg = HttpRequest String StreamEvent
-
-    HttpClient.stream httpPermission (HttpRequest "Request 1") requestConfig
--}
-stream : Permission -> (StreamEvent -> msg) -> RequestConfiguration Bytes -> Cmd msg
-stream permission toMsg config =
-    command <| Start { toMsg = toMsg, config = kernelRequestConfig permission config }
-
-
-{-| Send more data to the server. This allows you to generate more data as you need to, enabling
-you slice up a potentially costly, memory heavy or long-running operation over time.
-
-You don't have to wait for the matching `SentChunk` event before sending more data but keep in
-mind that data will be kept in memory until sent, potentially causing out-of-memory errors in
-the case of large amounts of data.
-
-If you're already receiving data from the server, calling this function will no effect.
--}
-sendChunk : StreamRequest -> Bytes -> Cmd msg
-sendChunk req bytes =
-    command <| SendChunk { bytes = bytes, request = req }
-
-
-{-| Use this when you're done sending data. The server will now begin streaming you the response.
--}
-startReceive : StreamRequest -> Cmd msg
-startReceive req =
-    command <| StartReceive req
-
-
-{-| Stops the request, for any reason, at any time. Useful if you have an unexpected error with
-your own source of data, or if the server response is one you know you don't want to handle after
-having inspected the headers.
--}
-abort : StreamRequest -> Cmd a
-abort req =
-    command <| Abort req
-
-
--- COMMANDS
-
-
-type MyCmd msg
-    = Start { toMsg : (StreamEvent -> msg), config : (KernelRequestConfig Bytes) }
-    | SendChunk { bytes : Bytes, request : StreamRequest }
-    | StartReceive StreamRequest
-    | Abort StreamRequest
-
-
-cmdMap : (a -> b) -> MyCmd a -> MyCmd b
-cmdMap func cmd =
-    when cmd is
-        Start { toMsg, config } ->
-            Start { toMsg = (toMsg >> func), config = config }
-
-        SendChunk { bytes, request = req } ->
-            SendChunk { bytes = bytes, request = req }
-        
-        StartReceive req ->
-            StartReceive req
-
-        Abort req ->
-            Abort req
-
-
-type alias RequestsState msg =
-    { nextId : Int 
-    , msgHandlers : Dict Int { toMsg : (StreamEvent -> msg), kernelRequest : KernelRequest }
-    }
-
-
-type KernelRequest = 
-    -- Actual implementation provided by kernel code
-    KernelRequest
-
-
-init : Task Never (RequestsState msg)
-init =
-  Task.succeed
-    { nextId = 0
-    , msgHandlers = Dict.empty
-    }
-
-
-onEffects : Platform.Router msg SelfMsg -> Array (MyCmd msg) -> RequestsState msg -> Task Never (RequestsState msg)
-onEffects router commands state =
-  when Array.popFirst commands is
-    Nothing ->
-      Task.succeed state
-
-    Just { first, rest } ->
-        when first is
-            Start { toMsg, config } ->
-                let
-                    streamingReq =
-                        StreamRequest state.nextId
-                in
-                Gren.Kernel.HttpClient.stream 
-                    (Platform.sendToSelf router << Cleanup) 
-                    (Platform.sendToApp router << toMsg) 
-                    streamingReq 
-                    config
-                    |> Task.map 
-                        (\kernelRequest -> 
-                            { state 
-                                | nextId = state.nextId + 1
-                                , msgHandlers = 
-                                    Dict.set 
-                                        state.nextId
-                                        { toMsg = toMsg
-                                        , kernelRequest = kernelRequest
-                                        }
-                                        state.msgHandlers
-                            }
-                        )
-                    |> Task.andThen (\updatedState -> onEffects router rest updatedState)
-
-            SendChunk { bytes, request = ((StreamRequest reqId) as req) } ->
-                when Dict.get reqId state.msgHandlers is
-                    Just msgHandler ->
-                        Gren.Kernel.HttpClient.sendChunk 
-                            (Platform.sendToApp router << msgHandler.toMsg) 
-                            msgHandler.kernelRequest
-                            req 
-                            bytes
-                            |> Task.andThen (\_ -> onEffects router rest state)
-                    
-                    Nothing ->
-                        onEffects router rest state
-            
-            StartReceive ((StreamRequest reqId) as req)->
-                when Dict.get reqId state.msgHandlers is
-                    Just msgHandler ->
-                        Gren.Kernel.HttpClient.startReceive
-                            (Platform.sendToSelf router << Cleanup)
-                            (Platform.sendToApp router << msgHandler.toMsg) 
-                            msgHandler.kernelRequest
-                            req 
-                            |> Task.andThen (\_ -> onEffects router rest state)
-                    
-                    Nothing ->
-                        onEffects router rest state
-
-            Abort (StreamRequest reqId)->
-                when Dict.get reqId state.msgHandlers is
-                    Just msgHandler ->
-                        Gren.Kernel.HttpClient.abort msgHandler.kernelRequest
-                            |> Task.andThen (\_ -> onEffects router rest state)
-                    
-                    Nothing ->
-                        onEffects router rest state
-                
-
-type SelfMsg
-    = Cleanup StreamRequest
-
-
-onSelfMsg : Platform.Router msg SelfMsg -> SelfMsg -> RequestsState msg -> Task Never (RequestsState msg)
-onSelfMsg _ event state =
-    when event is
-        Cleanup (StreamRequest reqId) ->
-            Task.succeed 
-                { state | msgHandlers = Dict.remove reqId state.msgHandlers }
