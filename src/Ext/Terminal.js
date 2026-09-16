@@ -1,5 +1,5 @@
-// Terminal's externs (m1b-extern.md §H8 step 5). Its resize listener is a
-// subscription and stays kernel code until Source (item 4).
+// Terminal's externs (m1b-extern.md §H8 step 5; the resize listener,
+// m1b-source.md §SO15).
 
 var process = require("node:process");
 
@@ -24,5 +24,23 @@ function setStdInRawMode(toggle, succeed, fail) {
 
 function setProcessTitle(title, succeed, fail) {
   process.title = title;
+  succeed();
+}
+
+// LISTENING
+
+// Each resize emits the new size into the caller's source (D71), built by the
+// Geng function it is handed. Removing it pauses stdout, as the kernel's did.
+function onResize(events, build, succeed, fail) {
+  var listener = function () {
+    events.emit(build(process.stdout.columns ?? 0, process.stdout.rows ?? 0));
+  };
+  process.stdout.on("resize", listener);
+  succeed(listener);
+}
+
+function removeListener(listener, succeed, fail) {
+  process.stdout.off("resize", listener);
+  process.stdout.pause();
   succeed();
 }

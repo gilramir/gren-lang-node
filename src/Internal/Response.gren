@@ -1,0 +1,35 @@
+module Internal.Response exposing (Response(..), Body(..), fromHandle)
+
+{-| `HttpServer.Response`'s type, where `HttpServer` can build one from the
+node response its request listener is handed (geng-lang `m1b-source.md`
+§SO15). The package does not expose this module, so the constructor stays the
+package's.
+-}
+
+import Dict exposing (Dict)
+import Extern exposing (Handle)
+import Bytes exposing (Bytes)
+
+
+type Response =
+    Response
+        { key : Handle
+        , status : Int
+        , headers : Dict String String
+        , body : Body
+        }
+
+
+type Body
+    = StringBody String
+    | BytesBody Bytes
+
+
+fromHandle : Handle -> Response
+fromHandle key =
+    Response
+        { key = key
+        , status = 200
+        , body = StringBody ""
+        , headers = Dict.empty
+        }

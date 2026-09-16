@@ -1,0 +1,24 @@
+module Internal.Connection exposing (Connection(..), handle)
+
+{-| `WebSocketServer`'s `Connection`, where `WebSocketServer.Connection` can
+take the handle out of one (geng-lang `m1b-source.md` §SO15). The package does
+not expose this module, so the constructor stays the package's.
+-}
+
+import Extern exposing (Handle)
+
+
+{-| What the connection listener builds: an object holding the connection's
+id, the `ws` client and the stream of its messages, which only the externs
+read.
+-}
+type Connection
+    = Connection Handle
+
+
+{-| The handle inside a `Connection`. A one-field constructor is its field only
+under `--optimize`, so it is taken out rather than trusted to be the value.
+-}
+handle : Connection -> Handle
+handle (Connection h) =
+    h

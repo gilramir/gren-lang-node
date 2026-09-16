@@ -1,9 +1,10 @@
-effect module WebSocketServer where { subscription = WebSocketSubscription } exposing (CloseReason, Connection, Message(..), Permission, Server, ServerError(..), connectionId, createServer, initialize, onClose, onConnection)
+module WebSocketServer exposing (CloseReason, Connection, Listener, Message(..), Permission, Server, ServerError(..), connectionId, createServer, initialize, onClose, onConnection, removeListener)
 
 {-| Create a WebSocket server that can accept connections and exchange messages.
 
-You write your server using The Gren Architecture by subscribing to connection
-and message events and responding with commands via [WebSocketServer.Connection](WebSocketServer.Connection).
+Connections and their closing arrive in a [`Source`](Source#Source) you read
+in a loop, and each connection is read from, written to and closed with
+[WebSocketServer.Connection](WebSocketServer.Connection).
 
 ## Initialization
 
@@ -15,7 +16,7 @@ and message events and responding with commands via [WebSocketServer.Connection]
 
 ## Events
 
-@docs onConnection, onClose
+@docs Listener, onConnection, onClose, removeListener
 
 ## Message Types
 
@@ -24,7 +25,8 @@ and message events and responding with commands via [WebSocketServer.Connection]
 
 import Bytes exposing (Bytes)
 import Extern exposing (Handle)
-import Gren.Kernel.WebSocketServer
+import Internal.Connection
+import Source exposing (Source)
 import Task exposing (Task)
 
 
@@ -72,7 +74,7 @@ initialize =
 -}
 createServer : Permission -> { host : String, port_ : Int } -> Task ServerError Server
 createServer _ options =
-    createServerWith (\code message -> ServerError { code = code, message = message }) options.host options.port_
+    createServerWith (\code message -> ServerError { code = code, message = message }) TextMessage BinaryMessage options.host options.port_
         |> Task.map Server
 
 
@@ -84,12 +86,8 @@ createServer _ options =
 
 Use [`connectionId`](WebSocketServer.connectionId) to get a comparable identifier for this connection.
 -}
-type Connection
-    = -- Note: the kernel's connection listener builds this, as a JavaScript
-      -- object with `id`, `client` and `readable`, and the externs read it at a
-      -- type variable. It becomes an `Extern.Handle` when that listener becomes
-      -- a `Source` (m1b-extern.md §H16).
-      Connection
+type alias Connection =
+    Internal.Connection.Connection
 
 
 {-| Get a comparable identifier for a connection.
@@ -98,27 +96,31 @@ Useful for storing connections in a `Dict Int Connection`.
 -}
 connectionId : Connection -> Int
 connectionId conn =
-    getConnectionIdExtern conn
+    getConnectionIdExtern (Internal.Connection.handle conn)
 
 
 
 -- EXTERNS
 
 
-{-| The `ws` server inside a `Server`, which is what the kernel's listener code
-is handed: a one-field constructor is a tagged record in a development build.
+{-| The `ws` server inside a `Server`, which is what a listener's extern is
+handed: a one-field constructor is a tagged record in a development build.
 -}
 serverHandle : Server -> Handle
 serverHandle (Server handle) =
     handle
 
 
+{-| The server is created with the two constructors of `Message`, since every
+connection's stream of messages is set up when the connection arrives, whether
+or not anything is listening for it yet.
+-}
 @extern(js, "WebSocketServer", "createServer")
-createServerWith : (String -> String -> error) -> String -> Int -> Task error Handle
+createServerWith : (String -> String -> error) -> (String -> message) -> (Bytes -> message) -> String -> Int -> Task error Handle
 
 
 @externPure(js, "WebSocketServer", "getConnectionId")
-getConnectionIdExtern : connection -> Int
+getConnectionIdExtern : Handle -> Int
 
 
 
@@ -141,120 +143,60 @@ type alias CloseReason =
 
 
 
--- SUBSCRIPTIONS
+-- LISTENING
 
 
-{-| Subscribe to new WebSocket client connections on a server.
+{-| A connection or close listener on a server, which delivers until it is
+[removed](#removeListener).
+-}
+type Listener
+    = Listener Handle
 
-For each new connection the handler receives the
-[`Connection`](WebSocketServer.Connection). Read incoming messages with
+
+{-| Deliver every new WebSocket client connection on a server into a
+[`Source`](Source#Source), made a `msg` by the function you give.
+
+Read incoming messages with
 [`WebSocketServer.Connection.readable`](WebSocketServer-Connection#readable)
 and send replies with
-[`WebSocketServer.Connection.send`](WebSocketServer-Connection#send).
+[`WebSocketServer.Connection.send`](WebSocketServer-Connection#send). The source
+is yours: many listeners may deliver into one, and closing it is yours too.
 
-    WebSocketServer.onConnection server
-        (\connection -> ClientConnected connection)
-
--}
-onConnection :
-    Server
-    -> (Connection -> msg)
-    -> Sub msg
-onConnection server handler =
-    subscription (OnConnectionSub { server = server, handler = handler })
-
-
-{-| Subscribe to connection close events on a server.
-
-    WebSocketServer.onClose server ClientDisconnected
+    WebSocketServer.onConnection server events ClientConnected
 
 -}
-onClose : Server -> (Connection -> CloseReason -> msg) -> Sub msg
-onClose server handler =
-    subscription (OnCloseSub { server = server, handler = handler })
+onConnection : Server -> Source msg -> (Connection -> msg) -> Task x Listener
+onConnection server events handler =
+    onConnectionExtern (serverHandle server) events (\conn -> handler (Internal.Connection.Connection conn))
+        |> Task.map Listener
 
 
+{-| Deliver every connection close on a server into a [`Source`](Source#Source),
+made a `msg` by the function you give.
 
--- EFFECT STUFF
+    WebSocketServer.onClose server events ClientDisconnected
 
-
-type WebSocketSubscription msg
-    = OnConnectionSub { server : Server, handler : Connection -> msg }
-    | OnCloseSub { server : Server, handler : Connection -> CloseReason -> msg }
-
-
-subMap : (a -> b) -> WebSocketSubscription a -> WebSocketSubscription b
-subMap fn sub =
-    when sub is
-        OnConnectionSub { server, handler } ->
-            OnConnectionSub
-                { server = server
-                , handler = handler >> fn
-                }
-
-        OnCloseSub { server, handler } ->
-            OnCloseSub
-                { server = server
-                , handler = \conn reason -> fn (handler conn reason)
-                }
+-}
+onClose : Server -> Source msg -> (Connection -> CloseReason -> msg) -> Task x Listener
+onClose server events handler =
+    onCloseExtern (serverHandle server) events (\conn code reason -> handler (Internal.Connection.Connection conn) { code = code, reason = reason })
+        |> Task.map Listener
 
 
-type alias State msg =
-    Array (WebSocketSubscription msg)
+{-| Stop a listener delivering. Removing one twice is not an error.
+-}
+removeListener : Listener -> Task x {}
+removeListener (Listener handle) =
+    removeListenerExtern handle
 
 
-init : Task Never (State msg)
-init =
-    Task.succeed []
+@extern(js, "WebSocketServer", "onConnection")
+onConnectionExtern : Handle -> Source msg -> (Handle -> msg) -> Task x Handle
 
 
-onEffects :
-    Platform.Router msg SelfMsg
-    -> Array (WebSocketSubscription msg)
-    -> State msg
-    -> Task Never (State msg)
-onEffects router subs state =
-    let
-        -- Clear all handler references for servers that had subscriptions in the
-        -- previous cycle. clearHandlers is idempotent, so calling it more than
-        -- once on the same server is safe (it just sets null on already-null fields).
-        -- This does not remove the server-level "connection" EventEmitter listener,
-        -- it only nulls the mutable handler references that per-client closures read on
-        -- each event fire.
-        _clearOldHandlers =
-            state
-                |> Array.map
-                    (\sub ->
-                        when sub is
-                            OnConnectionSub { server } ->
-                                Gren.Kernel.WebSocketServer.clearHandlers (serverHandle server)
-
-                            OnCloseSub { server } ->
-                                Gren.Kernel.WebSocketServer.clearHandlers (serverHandle server)
-                    )
-
-        -- Set the current handler references. Per-websocket event closures read these
-        -- on every event fire, so existing long-lived connections will use the
-        -- updated handlers without needing to be re-wired.
-        _setNewHandlers =
-            subs
-                |> Array.map
-                    (\sub ->
-                        when sub is
-                            OnConnectionSub { server, handler } ->
-                                Gren.Kernel.WebSocketServer.setConnectionHandler (serverHandle server) router handler
-
-                            OnCloseSub { server, handler } ->
-                                Gren.Kernel.WebSocketServer.setCloseHandler (serverHandle server) router handler
-                    )
-    in
-    Task.succeed subs
+@extern(js, "WebSocketServer", "onClose")
+onCloseExtern : Handle -> Source msg -> (Handle -> Int -> String -> msg) -> Task x Handle
 
 
-type SelfMsg
-    = Never
-
-
-onSelfMsg : Platform.Router msg SelfMsg -> SelfMsg -> State msg -> Task Never (State msg)
-onSelfMsg _ _ state =
-    Task.succeed state
+@extern(js, "WebSocketServer", "removeListener")
+removeListenerExtern : Handle -> Task x {}

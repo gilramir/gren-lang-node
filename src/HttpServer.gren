@@ -1,4 +1,4 @@
-effect module HttpServer where { subscription = HttpSub } exposing
+module HttpServer exposing
     -- Init
     ( Permission
     , initialize
@@ -15,13 +15,15 @@ effect module HttpServer where { subscription = HttpSub } exposing
     , bodyAsString
     , bodyFromJson
     , requestInfo
+    , Listener
     , onRequest
+    , removeListener
     )
 
 {-| Create a server that can respond to HTTP requests.
 
-You write your server using The Elm Architecture by subscribing to request
-events and responding with commands in update.
+Requests arrive in a [`Source`](Source#Source) you read in a loop, and each
+one is answered with [`HttpServer.Response.send`](HttpServer.Response#send).
 
 See the [example project](https://github.com/gren-lang/example-projects/blob/main/http-server/src/Main.gren) for what this looks like.
 Or the [integration tests](https://github.com/gren-lang/integration-tests/blob/main/http-server/src/Main.gren) for a more robust example with routing and multiple response types.
@@ -36,7 +38,7 @@ Or the [integration tests](https://github.com/gren-lang/integration-tests/blob/m
 
 ## Responding to requests
 
-@docs onRequest
+@docs Listener, onRequest, removeListener
 
 See [HttpServer.Response](HttpServer.Response) for more details on responding to requests.
 
@@ -50,8 +52,9 @@ import Json.Encode
 import Json.Decode
 import Node
 import Task exposing (Task)
-import Gren.Kernel.HttpServer
-import HttpServer.Response exposing (Response(..))
+import HttpServer.Response exposing (Response)
+import Internal.Response
+import Source exposing (Source)
 import Url exposing (Url, Protocol(..))
 
 
@@ -99,10 +102,10 @@ createServer _ options =
         |> Task.map Server
 
 
-{-| The node server inside a `Server`, which is what the kernel's listener code
-is handed. A one-field constructor is its field only under `--optimize`; in a
-development build it is a tagged record, so the handle is taken out here rather
-than trusted to be the value.
+{-| The node server inside a `Server`, which is what the request listener's
+extern is handed. A one-field constructor is its field only under `--optimize`;
+in a development build it is a tagged record, so the handle is taken out here
+rather than trusted to be the value.
 -}
 serverHandle : Server -> Handle
 serverHandle (Server handle) =
@@ -319,6 +322,11 @@ arrayPairs a =
 dictFromPairs : Array (Array String) -> Dict String String
 dictFromPairs pairs =
     let
+        -- Annotated so that it does not generalize over `Dict.set`'s
+        -- constraint: a local constrained definition keeps its witness
+        -- (geng-lang open-items, "A local constrained definition is not
+        -- specialized"), which geng-hs-spec refuses.
+        mapper : Array String -> Dict String String -> Dict String String
         mapper p dict =
             when p is
                 [a, b] ->
@@ -330,64 +338,50 @@ dictFromPairs pairs =
     Array.foldl mapper Dict.empty pairs
 
 
--- EFFECT STUFF
+-- LISTENING
 
 
-type HttpSub msg
-    = OnRequestSub { server : Server, requestHandler : (Request -> Response -> msg) }
-
-
-subMap : (a -> b) -> HttpSub a -> HttpSub b
-subMap f sub =
-    when sub is
-        OnRequestSub { server, requestHandler } ->
-            OnRequestSub { server = server, requestHandler = (\req res -> f (requestHandler req res)) }
-
-
-type alias State msg =
-    Array (HttpSub msg)
-
-
-init : Task Never (State msg)
-init =
-    Task.succeed []
-
-
-onEffects
-    : Platform.Router msg SelfMsg
-    -> Array (HttpSub msg)
-    -> State msg
-    -> Task Never (State msg)
-onEffects router subs state =
-    let
-        _removeListeners =
-            state
-                |> Array.map
-                    (\(OnRequestSub { server }) ->
-                        Gren.Kernel.HttpServer.removeAllListeners (serverHandle server)
-                    )
-        
-        _addListeners =
-            subs
-                |> Array.map
-                    (\(OnRequestSub { server, requestHandler }) ->
-                        Gren.Kernel.HttpServer.addListener (serverHandle server) router requestHandler
-                    )
-    in
-    Task.succeed subs
-
-
-type SelfMsg =
-    Never
-
-
-onSelfMsg : Platform.Router msg SelfMsg -> SelfMsg -> (State msg) -> Task Never (State msg)
-onSelfMsg _ _ state =
-    Task.succeed state
-
-
-{-| Subscribe to incoming HTTP requests.
+{-| A request listener on a server, which delivers requests until it is
+[removed](#removeListener).
 -}
-onRequest : Server -> (Request -> Response -> msg) -> Sub msg
-onRequest server requestHandler =
-    subscription (OnRequestSub { server = server, requestHandler = requestHandler })
+type Listener
+    = Listener Handle
+
+
+{-| Deliver every request the server receives into a [`Source`](Source#Source),
+each one made a `msg`, with the [`Response`](HttpServer.Response#Response) that
+answers it, by the function you give.
+
+The source is yours: many listeners may deliver into one, and closing it is
+yours too.
+
+    Task.bracket Source.new Source.close <| \requests ->
+        HttpServer.onRequest server requests GotRequest
+            |> Task.andThen (\_ -> serve requests)
+
+-}
+onRequest : Server -> Source msg -> (Request -> Response -> msg) -> Task x Listener
+onRequest server requests requestHandler =
+    let
+        build url headers method body response =
+            requestHandler
+                (toRequest { url = url, headers = headers, method = method, body = body })
+                (Internal.Response.fromHandle response)
+    in
+    onRequestExtern (serverHandle server) requests build
+        |> Task.map Listener
+
+
+{-| Stop a listener delivering requests. Removing one twice is not an error.
+-}
+removeListener : Listener -> Task x {}
+removeListener (Listener handle) =
+    removeListenerExtern handle
+
+
+@extern(js, "HttpServer", "onRequest")
+onRequestExtern : Handle -> Source msg -> (String -> Array String -> String -> Bytes -> Handle -> msg) -> Task x Handle
+
+
+@extern(js, "HttpServer", "removeListener")
+removeListenerExtern : Handle -> Task x {}

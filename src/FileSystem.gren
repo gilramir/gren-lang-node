@@ -1,4 +1,4 @@
-effect module FileSystem where { subscription = FileSystemSub } exposing
+module FileSystem exposing
     ( Permission
     , initialize
     -- Errors
@@ -54,8 +54,10 @@ effect module FileSystem where { subscription = FileSystemSub } exposing
     , unlink
     -- Watch
     , WatchEvent(..)
+    , Watcher
     , watch
     , watchRecursive
+    , unwatch
     --
     , homeDirectory
     , currentWorkingDirectory
@@ -86,7 +88,7 @@ effect module FileSystem where { subscription = FileSystemSub } exposing
 
 ## Watch for changes
 
-@docs WatchEvent, watch, watchRecursive
+@docs WatchEvent, Watcher, watch, watchRecursive, unwatch
 
 ## Special paths
 
@@ -100,15 +102,13 @@ effect module FileSystem where { subscription = FileSystemSub } exposing
 -}
 
 
-import Gren.Kernel.FileSystem
-import Gren.Kernel.FilePath
 import Internal.Host exposing (pathToString, pathFromString)
 import Bytes exposing (Bytes)
-import Dict exposing (Dict)
+import Extern exposing (Handle)
+import Source exposing (Source)
 import Task exposing (Task)
 import FileSystem.Path exposing (Path)
 import Time
-import Process
 import Stream
 
 
@@ -639,11 +639,7 @@ unlink _ path =
         |> Task.map (\_ -> path)
 
 
--- SUBSCRIPTION
-
-
-type FileSystemSub msg
-    = Watch { path : Path, recursive : Bool, msgMap : (WatchEvent -> msg) }
+-- WATCH
 
 
 {-| Represents a change within a watched directory.
@@ -659,190 +655,64 @@ type WatchEvent
     | Moved (Maybe Path)
 
 
-subMap : (a -> b) -> FileSystemSub a -> FileSystemSub b
-subMap mapFn sub =
-    when sub is
-        Watch { path, recursive, msgMap } ->
-            Watch { path = path, recursive = recursive, msgMap = (mapFn << msgMap) }
-
-
-{-| This notifies your application every time there is a change within the directory
-represented by the given [Path](FileSystem.Path#Path).
+{-| A running watch, which delivers events until it is [unwatched](#unwatch).
 -}
-watch : Permission -> (WatchEvent -> msg) -> Path -> Sub msg
-watch _ msgMap path =
-    subscription (Watch { path = path, recursive = False, msgMap = msgMap })
+type Watcher
+    = Watcher Handle
+
+
+{-| Deliver every change within the directory represented by the given
+[Path](FileSystem.Path#Path) into a [`Source`](Source#Source), each one made a
+`msg` by the function you give.
+
+The task fails, with the path and node's code, when the path cannot be watched
+— for instance because nothing is there. Events arrive until the watcher is
+[unwatched](#unwatch); the source is yours, so closing it is yours too, and
+many watchers may deliver into one source.
+
+    Task.bracket Source.new Source.close <| \events ->
+        FileSystem.watch permission events PathChanged path
+            |> Task.andThen (\_ -> loop events)
+
+-}
+watch : Permission -> Source msg -> (WatchEvent -> msg) -> Path -> Task Error Watcher
+watch _ events toMsg path =
+    watchWith False events toMsg path
+
 
 {-| Same as [watch](#watch), but this will also watch for changes in sub-directories.
 -}
-watchRecursive : Permission -> (WatchEvent -> msg) -> Path -> Sub msg
-watchRecursive _ msgMap path =
-    subscription (Watch { path = path, recursive = True, msgMap = msgMap })
+watchRecursive : Permission -> Source msg -> (WatchEvent -> msg) -> Path -> Task Error Watcher
+watchRecursive _ events toMsg path =
+    watchWith True events toMsg path
 
 
--- LOOP
-
-
-type alias State msg =
-    { watchers : Dict String (Taggers msg)
-    , recursiveWatchers : Dict String (Taggers msg)
-    , processes : Dict String Process.Id
-    }
-
-
-type alias Taggers msg =
-    Array (WatchEvent -> msg)
-
-
-init : Task Never (State msg)
-init =
-    Task.succeed
-        { watchers = Dict.empty
-        , recursiveWatchers = Dict.empty
-        , processes = Dict.empty
-        }
-
-
-onEffects
-    : Platform.Router msg SelfMsg
-    -> Array (FileSystemSub msg)
-    -> State msg
-    -> Task.Task Never (State msg)
-onEffects router subs state =
+watchWith : Bool -> Source msg -> (WatchEvent -> msg) -> Path -> Task Error Watcher
+watchWith recursive events toMsg path =
     let
-        newWatchers =
-            subs
-                |> Array.keepIf (\(Watch { recursive }) -> not recursive)
-                |> Array.foldl subToWatcher Dict.empty
-
-        newRecursiveWatchers =
-            subs
-                |> Array.keepIf (\(Watch { recursive }) -> recursive)
-                |> Array.foldl subToWatcher Dict.empty
-
-        toSpawn =
-            Dict.diff newWatchers state.watchers
-                |> Dict.keys
-        
-        recursiveToSpawn =
-            Dict.diff newRecursiveWatchers state.recursiveWatchers
-                |> Dict.keys
-        
-        toStop =
-            Dict.diff state.watchers newWatchers
-                |> Dict.keys
-        
-        recursiveToStop =
-            Dict.diff state.recursiveWatchers newRecursiveWatchers
-                |> Dict.keys
-
-        asRecursiveKey key =
-            key ++ "$recursive"
-
-        flipFold fn array initial =
-            Array.foldl fn initial array
-
-        taskStopper keyMapper =
-            (\key accTask ->
-                Task.andThen 
-                    (\processes ->
-                        let
-                            realKey = 
-                                keyMapper key
-                        in
-                        when Dict.get realKey processes is
-                            Just processId ->
-                                Process.kill processId
-                                    |> Task.map (\_ -> Dict.remove realKey processes)
-
-                            Nothing ->
-                                accTask
-                    )
-                    accTask
-            )
-
-        taskSpawner keyMapper isRecursive =
-            (\key accTask ->
-                accTask
-                    |> Task.andThen 
-                        (\processes ->
-                            Process.spawn (attachWatcher key isRecursive (\event -> Platform.sendToSelf router <| WatchPathChange { recursive = isRecursive, key = key, event = event }))
-                                |> Task.map (\id -> Dict.set (keyMapper key) id processes)
-                        )
-            )
-    in
-    Array.foldl 
-        (taskStopper identity)
-        (Task.succeed state.processes)
-        toStop
-    |> flipFold (taskStopper asRecursiveKey) recursiveToStop
-    |> flipFold (taskSpawner identity False) toSpawn
-    |> flipFold (taskSpawner asRecursiveKey True) recursiveToSpawn
-    |> Task.map
-        (\newProcesses ->
-            { watchers = newWatchers
-            , recursiveWatchers = newRecursiveWatchers
-            , processes = newProcesses
-            }
-        )
-
-
-subToWatcher : FileSystemSub msg -> Dict String (Taggers msg) -> Dict String (Taggers msg)
-subToWatcher sub taggers =
-    when sub is
-        Watch { path, msgMap = tagger } ->
+        build isChange names =
             let
-                key =
-                    Gren.Kernel.FilePath.toString path
+                name =
+                    Array.first names
+                        |> Maybe.map pathFromString
             in
-            when Dict.get key taggers is
-                Just data ->
-                    Dict.set 
-                        key
-                        (Array.pushLast tagger data)
-                        taggers
+            toMsg
+                (if isChange then
+                    Changed name
 
-                Nothing ->
-                    Dict.set key [ tagger ] taggers
-
-
-attachWatcher : String -> Bool -> (WatchEvent -> Task.Task Never {}) -> Task.Task x {}
-attachWatcher =
-  Gren.Kernel.FileSystem.watch
-
-
-type SelfMsg
-    = WatchPathChange { recursive : Bool, key : String, event : WatchEvent }
-
-
-onSelfMsg : Platform.Router msg SelfMsg -> SelfMsg -> State msg -> Task.Task Never (State msg)
-onSelfMsg router (WatchPathChange { recursive, key, event }) state =
-    let
-        notifyApplication taggers =
-            Array.foldl 
-                (\tagger tasks -> 
-                    tasks
-                        |> Task.andThen (\{} -> Platform.sendToApp router (tagger event))
+                 else
+                    Moved name
                 )
-                (Task.succeed {})
-                taggers
-                |> Task.map (\{} -> state)
     in
-    if recursive then
-        when Dict.get key state.recursiveWatchers is
-            Just taggers ->
-                notifyApplication taggers
+    watchExtern (errorAt path) events build recursive (pathToString path)
+        |> Task.map Watcher
 
-            Nothing ->
-                Task.succeed state
 
-    else
-        when Dict.get key state.watchers is
-            Just taggers ->
-                notifyApplication taggers
-
-            Nothing ->
-                Task.succeed state
+{-| Stop a watcher delivering events. Stopping one twice is not an error.
+-}
+unwatch : Watcher -> Task x {}
+unwatch (Watcher handle) =
+    unwatchExtern handle
 
 
 -- SPECIAL PATHS
@@ -1050,3 +920,11 @@ tmpDirExtern : Task x String
 
 @extern(js, "FileSystem", "devNull")
 devNullExtern : Task x String
+
+
+@extern(js, "FileSystem", "watch")
+watchExtern : (String -> String -> error) -> Source msg -> (Bool -> Array String -> msg) -> Bool -> String -> Task error Handle
+
+
+@extern(js, "FileSystem", "unwatch")
+unwatchExtern : Handle -> Task x {}

@@ -1,5 +1,5 @@
 // FileSystem's and FileSystem.FileHandle's externs (m1b-extern.md §H8 step
-// 5). Watching a path is a subscription and stays kernel code until item 4.
+// 5; watching, m1b-source.md §SO15).
 //
 // A path crosses as the string node's own `path` would format, and comes back
 // as one for Geng to parse. A file handle is Geng's record of its path and its
@@ -488,4 +488,41 @@ function tmpDir(succeed, fail) {
 
 function devNull(succeed, fail) {
   succeed(os.devNull);
+}
+
+// WATCH
+
+// A watcher emits into the caller's source (D71). The event is built by the
+// Geng function it is handed, whether the change was to contents and the name
+// as an array of none or one, since a constructor is Geng's to name. A path
+// that cannot be watched fails the task; an error from a running watcher
+// stops it, as there is no task left to fail.
+function watch(makeError, events, build, recursive, pathString, succeed, fail) {
+  var watcher;
+  try {
+    watcher = fs.watch(
+      pathString,
+      { recursive: recursive },
+      function (eventType, filename) {
+        var names = filename ? [String(filename)] : [];
+        if (eventType === "change") {
+          events.emit(build(true, names));
+        } else if (eventType === "rename") {
+          events.emit(build(false, names));
+        }
+      },
+    );
+  } catch (err) {
+    fail(makeError(err.code || "", err.message || ""));
+    return;
+  }
+  watcher.on("error", function () {
+    watcher.close();
+  });
+  succeed(watcher);
+}
+
+function unwatch(watcher, succeed, fail) {
+  watcher.close();
+  succeed();
 }

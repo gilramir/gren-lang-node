@@ -1,4 +1,4 @@
-effect module Terminal where { subscription = TerminalSub } exposing
+module Terminal exposing
     ( Permission
     , Configuration
     , Size
@@ -7,7 +7,9 @@ effect module Terminal where { subscription = TerminalSub } exposing
     , setStdInRawMode
     , setProcessTitle
     --
+    , Listener
     , onResize
+    , removeListener
     )
 
 
@@ -22,16 +24,16 @@ terminal is connected to this application.
 
 @docs setStdInRawMode, setProcessTitle
 
-## Subscriptions
+## Listening
 
-@docs onResize
+@docs Listener, onResize, removeListener
 
 -}
 
 
+import Extern exposing (Handle)
+import Source exposing (Source)
 import Task exposing (Task)
-import Process
-import Gren.Kernel.Terminal
 
 
 {-| The permission for performing commands specified in this module.
@@ -123,100 +125,36 @@ setStdInRawModeExtern : Bool -> Task x {}
 setProcessTitleExtern : String -> Task x {}
 
 
--- SUBSCRIPTIONS
+-- LISTENING
 
 
-type TerminalSub msg
-    = OnResize (Size -> msg)
-
-
-subMap : (a -> b) -> TerminalSub a -> TerminalSub b
-subMap mapFn sub =
-    when sub is
-        OnResize msgMap ->
-            OnResize (mapFn << msgMap)
-
-
-{-| A subscription that triggers every time the size of the terminal changes.
+{-| A resize listener, which delivers sizes until it is
+[removed](#removeListener).
 -}
-onResize : Permission -> (Size -> msg) -> Sub msg
-onResize _ toMsg =
-    subscription (OnResize toMsg)
+type Listener
+    = Listener Handle
 
 
--- LOOP
+{-| Deliver the terminal's new size into a [`Source`](Source#Source) every time
+it changes, made a `msg` by the function you give. The source is yours: many
+listeners may deliver into one, and closing it is yours too.
+-}
+onResize : Permission -> Source msg -> (Size -> msg) -> Task x Listener
+onResize _ events toMsg =
+    onResizeExtern events (\columns rows -> toMsg { columns = columns, rows = rows })
+        |> Task.map Listener
 
 
-type alias State msg =
-    { taggers : Array (Size -> msg)
-    , maybeProcessId : Maybe Process.Id
-    }
+{-| Stop a listener delivering sizes. Removing one twice is not an error.
+-}
+removeListener : Listener -> Task x {}
+removeListener (Listener handle) =
+    removeListenerExtern handle
 
 
-init : Task Never (State msg)
-init =
-    Task.succeed
-        { taggers = []
-        , maybeProcessId = Nothing
-        }
+@extern(js, "Terminal", "onResize")
+onResizeExtern : Source msg -> (Int -> Int -> msg) -> Task x Handle
 
 
-onEffects
-    : Platform.Router msg Event
-    -> Array (TerminalSub msg)
-    -> State msg
-    -> Task Never (State msg)
-onEffects router subs state =
-    let
-        newTaggers =
-            Array.foldl extractTagger [] subs
-
-        extractTagger (OnResize tagger) acc =
-            Array.pushLast tagger acc
-
-        subscriptionTask =
-            if Array.length newTaggers > 0 then
-                when state.maybeProcessId is
-                    Just pid ->
-                        Task.succeed <| Just pid
-
-                    Nothing ->
-                        Gren.Kernel.Terminal.attachListener (\data -> Platform.sendToSelf router (SelfOnResize data))
-                            |> Process.spawn
-                            |> Task.map Just
-
-
-            else
-                when state.maybeProcessId is
-                    Just pid ->
-                        Process.kill pid
-                            |> Task.map (\_ -> Nothing)
-
-                    Nothing ->
-                        Task.succeed Nothing
-    in
-    subscriptionTask
-        |> Task.andThen (\maybeProcessId ->
-            Task.succeed
-                { taggers = newTaggers
-                , maybeProcessId = maybeProcessId
-                }
-            )
-
-
-type Event
-    = SelfOnResize Size
-
-
-onSelfMsg : Platform.Router msg Event -> Event -> State msg -> Task Never (State msg)
-onSelfMsg router event state =
-    when event is
-        SelfOnResize newSize ->
-            state.taggers
-                |> Array.map (\tagger -> tagger newSize)
-                |> Array.foldl
-                    (\msg tasks ->
-                        Task.andThen (\{} -> Platform.sendToApp router msg) tasks
-                    )
-                    (Task.succeed {})
-                |> Task.map (\_ -> state)
+@extern(js, "Terminal", "removeListener")
+removeListenerExtern : Handle -> Task x {}

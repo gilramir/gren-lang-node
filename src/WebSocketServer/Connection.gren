@@ -27,8 +27,10 @@ handle failures explicitly.
 -}
 
 import Bytes exposing (Bytes)
+import Extern exposing (Handle)
 import Stream exposing (Readable)
 import Task exposing (Task)
+import Internal.Connection
 import WebSocketServer exposing (Connection, Message(..))
 
 
@@ -51,7 +53,7 @@ connection closes, and errors if the connection errors (observed as
 -}
 readable : Connection -> Readable Message
 readable connection =
-    getReadableExtern connection
+    getReadableExtern (Internal.Connection.handle connection)
 
 
 
@@ -72,10 +74,10 @@ send : Connection -> Message -> Task Error {}
 send connection message =
     when message is
         TextMessage text ->
-            sendExtern makeError connection text
+            sendExtern makeError (Internal.Connection.handle connection) text
 
         BinaryMessage bytes ->
-            sendBytesExtern makeError connection bytes
+            sendBytesExtern makeError (Internal.Connection.handle connection) bytes
 
 
 
@@ -92,7 +94,7 @@ The reason string must not exceed 123 bytes.
 -}
 close : Connection -> Int -> String -> Task Error {}
 close connection code reason =
-    closeExtern makeError connection code reason
+    closeExtern makeError (Internal.Connection.handle connection) code reason
 
 
 
@@ -105,19 +107,19 @@ makeError code message =
 
 
 @externPure(js, "WebSocketServer", "getReadable")
-getReadableExtern : connection -> readable
+getReadableExtern : Handle -> readable
 
 
 @extern(js, "WebSocketServer", "send")
-sendExtern : (String -> String -> error) -> connection -> String -> Task error {}
+sendExtern : (String -> String -> error) -> Handle -> String -> Task error {}
 
 
 @extern(js, "WebSocketServer", "sendBytes")
-sendBytesExtern : (String -> String -> error) -> connection -> Bytes -> Task error {}
+sendBytesExtern : (String -> String -> error) -> Handle -> Bytes -> Task error {}
 
 
 @extern(js, "WebSocketServer", "close")
-closeExtern : (String -> String -> error) -> connection -> Int -> String -> Task error {}
+closeExtern : (String -> String -> error) -> Handle -> Int -> String -> Task error {}
 
 
 

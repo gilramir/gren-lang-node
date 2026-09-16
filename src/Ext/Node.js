@@ -1,6 +1,6 @@
-// Node's externs (m1b-extern.md §H8 step 5). `log`, which a `main : String`
-// is handed to, and the three signal and event-loop listeners, which are
-// subscriptions, stay kernel code until item 4.
+// Node's externs (m1b-extern.md §H8 step 5; the signal listeners,
+// m1b-source.md §SO15). `log`, which a `main : String` is handed to, stays
+// kernel code until `Platform` goes.
 
 var stream = require("node:stream");
 var process = require("node:process");
@@ -90,5 +90,23 @@ function exitWithCode(code, succeed, fail) {
 
 function setExitCode(code, succeed, fail) {
   process.exitCode = code;
+  succeed();
+}
+
+// SIGNALS
+
+// Each delivery emits the one `msg` the listener was given into the caller's
+// source (D71). Node's own handling of the signal, ending the process, is off
+// while any listener for it is installed, as it always was.
+function onSignal(signal, events, msg, succeed, fail) {
+  var listener = function () {
+    events.emit(msg);
+  };
+  process.on(signal, listener);
+  succeed({ signal: signal, listener: listener });
+}
+
+function removeListener(handle, succeed, fail) {
+  process.off(handle.signal, handle.listener);
   succeed();
 }
