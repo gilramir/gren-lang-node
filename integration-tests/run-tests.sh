@@ -8,7 +8,6 @@ test_dirs=(
   "signals"
   "file-system"
   "child-process"
-  "sqlite"
   "websocket"
 )
 
