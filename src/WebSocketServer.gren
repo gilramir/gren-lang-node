@@ -25,8 +25,6 @@ and message events and responding with commands via [WebSocketServer.Connection]
 import Bytes exposing (Bytes)
 import Extern exposing (Handle)
 import Gren.Kernel.WebSocketServer
-import Init
-import Internal.Init
 import Task exposing (Task)
 
 
@@ -56,11 +54,14 @@ type ServerError
 
 
 {-| Initialize the [`WebSocketServer`](WebSocketServer) module and get permission to create a server.
+
+Only the application may call this, not a package it depends on (D258): a
+package that needs it takes a `Permission` from its caller.
 -}
-initialize : Init.Task Permission
+@capability
+initialize : Task x Permission
 initialize =
     Task.succeed Permission
-        |> Internal.Init.Task
 
 
 {-| Task to create a WebSocket server.

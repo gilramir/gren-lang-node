@@ -46,8 +46,6 @@ import Bytes exposing (Bytes)
 import Bytes.Decode as Decode
 import Dict exposing (Dict)
 import Extern exposing (Handle)
-import Init
-import Internal.Init
 import Json.Encode
 import Json.Decode
 import Node
@@ -82,11 +80,14 @@ type ServerError =
 
 
 {-| Initialize the [`HttpServer`](HttpServer) module and get permission to create a server.
+
+Only the application may call this, not a package it depends on (D258): a
+package that needs it takes a `Permission` from its caller.
 -}
-initialize : Init.Task Permission
+@capability
+initialize : Task x Permission
 initialize =
     Task.succeed Permission
-        |> Internal.Init.Task
 
 
 

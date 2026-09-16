@@ -90,8 +90,6 @@ extra complexity, is that you can perform actions while the request is being per
 
 
 import Dict exposing (Dict)
-import Init
-import Internal.Init
 import Json.Encode as Json
 import Json.Decode
 import Bytes exposing (Bytes)
@@ -113,19 +111,19 @@ type Permission
 
 {-| Call this during application initialization to get the permission to perform any kind of HTTP request.
 -}
-initialize : Init.Task Permission
+@capability
+initialize : Task x Permission
 initialize =
     Task.succeed AnyPermission
-        |> Internal.Init.Task
 
 
 {-| Call during application initialization to get a host-specific permission. Code that has this permission value, will only
 be able to contact a specific host.
 -}
-initializeForHost : String -> Init.Task Permission
+@capability
+initializeForHost : String -> Task x Permission
 initializeForHost host =
     Task.succeed (SpecificPermission host)
-        |> Internal.Init.Task
 
 
 -- REQUEST CONFIGURATION

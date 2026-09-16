@@ -1,5 +1,6 @@
 effect module Node where { subscription = NodeSub } exposing
     ( Environment
+    , getEnvironment
     , Platform(..)
     , getPlatform
     , CpuArchitecture(..)
@@ -45,7 +46,7 @@ you to contact said subsystem. Be careful what code you give these permissions t
 
 ## Environment information
 
-@docs Environment, getEnvironmentVariables, Platform, getPlatform, CpuArchitecture, getCpuArchitecture
+@docs Environment, getEnvironment, getEnvironmentVariables, Platform, getPlatform, CpuArchitecture, getCpuArchitecture
 
 ## Exit
 
@@ -60,8 +61,6 @@ you to contact said subsystem. Be careful what code you give these permissions t
 
 import Bytes exposing (Bytes)
 import Dict exposing ( Dict )
-import Init
-import Internal.Init
 import Task exposing ( Task )
 import Gren.Kernel.Node
 import FileSystem.Path exposing (Path)
@@ -92,8 +91,16 @@ type alias Environment =
     }
 
 
-initializeEnvironment : Task Never Environment
-initializeEnvironment =
+{-| The `Environment` a `main : Task Never {}` runs in: what `defineProgram` and
+`defineSimpleProgram` hand their `init`, for a program that has no `init`
+(geng-lang `m1b-source.md` §SO12).
+
+Only the application may call this, not a package it depends on (D258): the
+environment is what `init` was handed and nobody else was.
+-}
+@capability
+getEnvironment : Task x Environment
+getEnvironment =
     initWith
         (\applicationPath platform arch args stdout stderr stdin ->
             { platform = platformFromString platform
@@ -112,6 +119,11 @@ initializeEnvironment =
             , stdin = stdin
             }
         )
+
+
+initializeEnvironment : Task Never Environment
+initializeEnvironment =
+    getEnvironment
 
 
 {-| The platform, or operating system, that your application is running on.
@@ -274,7 +286,7 @@ type Msg model msg
 {-| The required functions that define a program.
 -}
 type alias ProgramConfiguration model msg =
-    { init : Environment -> Init.Task { model : model, command : Cmd msg }
+    { init : Environment -> Task Never { model : model, command : Cmd msg }
     , update : msg -> model -> { model : model, command : Cmd msg }
     , subscriptions : model -> Sub msg
     }
@@ -294,21 +306,16 @@ defineProgram config =
 
 
 initProgram
-    : (Environment -> Init.Task { model : model, command : Cmd msg })
+    : (Environment -> Task Never { model : model, command : Cmd msg })
     -> {}
     -> { model : Model model, command : Cmd (Msg model msg) }
 initProgram initTask {} =
     { model = Uninitialized
     , command = 
         initializeEnvironment
-            |> Task.andThen (\env -> unwrap <| initTask env)
+            |> Task.andThen initTask
             |> Task.perform InitDone
     }
-
-
-unwrap : Internal.Init.Task a -> Task Never a
-unwrap (Internal.Init.Task task) =
-    task
 
 
 update
@@ -361,22 +368,22 @@ subscriptions appSubs model =
 {-| This lets the runtime know that you're done initializing other subsystems,
 and that your program is ready to start.
 -}
-startProgram : { model : model, command : Cmd cmd } -> Init.Task { model : model, command : Cmd cmd }
+startProgram : { model : model, command : Cmd cmd } -> Task x { model : model, command : Cmd cmd }
 startProgram initResult =
-    Internal.Init.Task (Task.succeed initResult)
+    Task.succeed initResult
 
 
 {-| Define a simple program that doesn't require long-lived state or the ability to respond
 to messages or subscriptions. Ideal for simple and short-lived programs.
 -}
-defineSimpleProgram : (Environment -> Init.Task (Cmd a)) -> SimpleProgram a
+defineSimpleProgram : (Environment -> Task Never (Cmd a)) -> SimpleProgram a
 defineSimpleProgram initTask =
     Platform.worker
         { init = \_ ->
             { model = {}
             , command =
                 initializeEnvironment
-                    |> Task.andThen (\env -> unwrap <| initTask env)
+                    |> Task.andThen initTask
                     |> Task.executeCmd
             }
         , update = (\_ _ -> { model = {}, command = Cmd.none })
@@ -387,16 +394,16 @@ defineSimpleProgram initTask =
 {-| When defining a program with [defineSimpleProgram](#defineSimpleProgram), use this function to define the
 final command to execute.
 -}
-endSimpleProgram : Task Never x -> Init.Task (Cmd a)
+endSimpleProgram : Task Never x -> Task y (Cmd a)
 endSimpleProgram finalTask =
-    Internal.Init.Task (Task.succeed <| Task.execute finalTask)
+    Task.succeed (Task.execute finalTask)
 
 
 {-| Similar to [endSimpleProgram](#endSimpleProgram), but takes a `Cmd` instead of a `Task`.
 -}
-endSimpleProgramWithCmd : Cmd a -> Init.Task (Cmd a)
+endSimpleProgramWithCmd : Cmd a -> Task x (Cmd a)
 endSimpleProgramWithCmd cmd =
-    Internal.Init.Task (Task.succeed cmd)
+    Task.succeed cmd
 
 
 -- EXIT

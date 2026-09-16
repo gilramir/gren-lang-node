@@ -32,8 +32,6 @@ terminal is connected to this application.
 import Task exposing (Task)
 import Process
 import Gren.Kernel.Terminal
-import Init
-import Internal.Init 
 
 
 {-| The permission for performing commands specified in this module.
@@ -69,7 +67,8 @@ type alias Size =
 `Nothing` is returned if this program isn't connected to an interactive terminal, which
 can happen in CI-setups or when used as part of a unix pipe.
 -}
-initialize : Init.Task (Maybe Configuration)
+@capability
+initialize : Task x (Maybe Configuration)
 initialize =
     initWith (\isTTY colorDepth columns rows -> { isTTY = isTTY, colorDepth = colorDepth, columns = columns, rows = rows })
         |> Task.map (\raw ->
@@ -84,7 +83,6 @@ initialize =
             else
                 Nothing
         )
-        |> Internal.Init.Task
 
 
 -- COMMANDS

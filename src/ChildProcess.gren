@@ -44,8 +44,6 @@ import Gren.Kernel.ChildProcess
 import Bytes exposing (Bytes)
 import Dict exposing (Dict)
 import Task exposing (Task)
-import Init
-import Internal.Init
 import Process
 import Stream
 
@@ -60,11 +58,14 @@ type Permission
 
 {-| Initialize the `ChildProcess` subsystem, which gains you the permission to
 spawn child processes.
+
+Only the application may call this, not a package it depends on (D258): a
+package that needs it takes a `Permission` from its caller.
 -}
-initialize : Init.Task Permission
+@capability
+initialize : Task x Permission
 initialize =
     Task.succeed Permission
-        |> Internal.Init.Task
 
 
 -- OPTIONS

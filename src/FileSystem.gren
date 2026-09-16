@@ -107,8 +107,6 @@ import Bytes exposing (Bytes)
 import Dict exposing (Dict)
 import Task exposing (Task)
 import FileSystem.Path exposing (Path)
-import Init
-import Internal.Init
 import Time
 import Process
 import Stream
@@ -124,11 +122,14 @@ type Permission
 
 {-| Initialize the `FileSystem` subsystem, which gains you the permission to perform
 file system operations.
+
+Only the application may call this, not a package it depends on (D258): a
+package that needs the file system takes a `Permission` from its caller.
 -}
-initialize : Init.Task Permission
+@capability
+initialize : Task x Permission
 initialize =
     Task.succeed Permission
-        |> Internal.Init.Task
 
 
 -- ERRORS
