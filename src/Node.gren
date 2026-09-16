@@ -7,16 +7,6 @@ module Node exposing
     , getCpuArchitecture
     , getEnvironmentVariables
     --
-    , SimpleProgram
-    , defineSimpleProgram
-    , endSimpleProgram
-    , endSimpleProgramWithCmd
-    --
-    , Program
-    , ProgramConfiguration
-    , defineProgram
-    , startProgram    
-    --
     , exit
     , exitWithCode
     , setExitCode
@@ -28,22 +18,12 @@ module Node exposing
     )
 
 
-{-| A NodeJS program is defined like a browser-based Gren program, except that
-there is more flexibility regarding how it is initialized.
+{-| What a program running on NodeJS can learn about where it runs, how it ends,
+and the signals it can listen for.
 
-You can initialize any number of subsystems, like `FileSystem` or `Terminal`, before
-initializing your own program with the results of those initializations.
-
-As part of initializing a subsystem, you usually also get access to a value that permits
-you to contact said subsystem. Be careful what code you give these permissions to.
-
-## Program
-
-@docs Program, ProgramConfiguration, defineProgram, startProgram
-
-## Simple Program
-
-@docs SimpleProgram, defineSimpleProgram, endSimpleProgram, endSimpleProgramWithCmd
+A program is a `main : Task Never {}`. It ends when that task completes, with
+the status set by [`setExitCode`](#setExitCode), or sooner with
+[`exit`](#exit) or [`exitWithCode`](#exitWithCode).
 
 ## Environment information
 
@@ -64,10 +44,8 @@ import Bytes exposing (Bytes)
 import Dict exposing ( Dict )
 import Task exposing ( Task )
 import Extern exposing (Handle)
-import Gren.Kernel.Node
 import FileSystem.Path exposing (Path)
 import Stream
-import Platform
 import Source exposing (Source)
 
 
@@ -93,9 +71,8 @@ type alias Environment =
     }
 
 
-{-| The `Environment` a `main : Task Never {}` runs in: what `defineProgram` and
-`defineSimpleProgram` hand their `init`, for a program that has no `init`
-(geng-lang `m1b-source.md` §SO12).
+{-| The `Environment` a `main : Task Never {}` runs in (geng-lang
+`m1b-source.md` §SO12).
 
 Only the application may call this, not a package it depends on (D258): the
 environment is what `init` was handed and nobody else was.
@@ -121,11 +98,6 @@ getEnvironment =
             , stdin = stdin
             }
         )
-
-
-initializeEnvironment : Task Never Environment
-initializeEnvironment =
-    getEnvironment
 
 
 {-| The platform, or operating system, that your application is running on.
@@ -256,156 +228,6 @@ getEnvironmentVariables =
                 |> Dict.fromStringPairs
         )
 
-
--- PROGRAMS
-
-
-{-| A program that executes a single task and then exits.
--}
-type alias SimpleProgram msg =
-    Platform.Program {} {} msg
-
-
-{-| The definition of a Gren program that runs on NodeJS.
--}
-type alias Program model msg =
-    Platform.Program {} (Model model) (Msg model msg)
-
-
--- TOP LEVEL PROGRAM
-
-
-type Model model
-    = Uninitialized
-    | Initialized model
-
-
-type Msg model msg
-    = InitDone { model : model, command : Cmd msg }
-    | MsgReceived msg
-
-
-{-| The required functions that define a program.
--}
-type alias ProgramConfiguration model msg =
-    { init : Environment -> Task Never { model : model, command : Cmd msg }
-    , update : msg -> model -> { model : model, command : Cmd msg }
-    , subscriptions : model -> Sub msg
-    }
-
-
-{-| Define a program with access to long-lived state and the ability to respond to
-messages and listen to subscriptions. If you want to define a simple and short-lived
-program, chances are you're looking for [defineSimpleProgram](#defineSimpleProgram) instead.
--}
-defineProgram : ProgramConfiguration model msg -> Program model msg
-defineProgram config =
-    Platform.worker
-        { init = initProgram config.init
-        , update = update config.update
-        , subscriptions = subscriptions config.subscriptions
-        }
-
-
-initProgram
-    : (Environment -> Task Never { model : model, command : Cmd msg })
-    -> {}
-    -> { model : Model model, command : Cmd (Msg model msg) }
-initProgram initTask {} =
-    { model = Uninitialized
-    , command = 
-        initializeEnvironment
-            |> Task.andThen initTask
-            |> Task.perform InitDone
-    }
-
-
-update
-    : (msg -> model -> { model : model, command : Cmd msg })
-    -> Msg model msg
-    -> Model model
-    -> { model : Model model, command : Cmd (Msg model msg) }
-update appUpdate msg model =
-    when model is
-        Uninitialized ->
-            when msg is
-                InitDone initResult ->
-                    { model = Initialized initResult.model
-                    , command = Cmd.map MsgReceived initResult.command
-                    }
-
-                MsgReceived _ ->
-                    -- Ignore
-                    { model = model, command = Cmd.none }
-
-        Initialized appModel ->
-            when msg is
-                InitDone _ ->
-                    -- Ignore
-                    { model = model, command = Cmd.none }
-
-                MsgReceived appMsg ->
-                    let
-                        updateResult =
-                            appUpdate appMsg appModel
-                    in
-                    { model = Initialized updateResult.model
-                    , command = Cmd.map MsgReceived updateResult.command
-                    }
-
-
-subscriptions
-    : (model -> Sub msg)
-    -> (Model model)
-    -> Sub (Msg model msg)
-subscriptions appSubs model =
-    when model is
-        Uninitialized ->
-            Sub.none
-
-        Initialized appModel ->
-            Sub.map MsgReceived (appSubs appModel)
-
-
-{-| This lets the runtime know that you're done initializing other subsystems,
-and that your program is ready to start.
--}
-startProgram : { model : model, command : Cmd cmd } -> Task x { model : model, command : Cmd cmd }
-startProgram initResult =
-    Task.succeed initResult
-
-
-{-| Define a simple program that doesn't require long-lived state or the ability to respond
-to messages or subscriptions. Ideal for simple and short-lived programs.
--}
-defineSimpleProgram : (Environment -> Task Never (Cmd a)) -> SimpleProgram a
-defineSimpleProgram initTask =
-    Platform.worker
-        { init = \_ ->
-            { model = {}
-            , command =
-                initializeEnvironment
-                    |> Task.andThen initTask
-                    |> Task.executeCmd
-            }
-        , update = (\_ _ -> { model = {}, command = Cmd.none })
-        , subscriptions = (\_ -> Sub.none)
-        }
-
-
-{-| When defining a program with [defineSimpleProgram](#defineSimpleProgram), use this function to define the
-final command to execute.
--}
-endSimpleProgram : Task Never x -> Task y (Cmd a)
-endSimpleProgram finalTask =
-    Task.succeed (Task.execute finalTask)
-
-
-{-| Similar to [endSimpleProgram](#endSimpleProgram), but takes a `Cmd` instead of a `Task`.
--}
-endSimpleProgramWithCmd : Cmd a -> Task x (Cmd a)
-endSimpleProgramWithCmd cmd =
-    Task.succeed cmd
 
 
 -- EXIT

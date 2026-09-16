@@ -1,6 +1,5 @@
 // Node's externs (m1b-extern.md §H8 step 5; the signal listeners,
-// m1b-source.md §SO15). `log`, which a `main : String` is handed to, stays
-// kernel code until `Platform` goes.
+// m1b-source.md §SO15).
 
 var stream = require("node:stream");
 var process = require("node:process");

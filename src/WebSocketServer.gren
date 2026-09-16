@@ -69,7 +69,7 @@ initialize =
 {-| Task to create a WebSocket server.
 
     WebSocketServer.createServer permission { host = "0.0.0.0", port_ = 8080 }
-        |> Task.attempt ServerCreated
+        |> Task.andThen (\server -> serve server)
 
 -}
 createServer : Permission -> { host : String, port_ : Int } -> Task ServerError Server

@@ -7,7 +7,7 @@ open or if a network error occurs. This lets your application detect and
 handle failures explicitly.
 
     WebSocketServer.Connection.send connection (WebSocketServer.TextMessage "Hello!")
-        |> Task.attempt MessageSent
+        |> Task.onError (\error -> Console.writeErr (errorToString error ++ "\n"))
 
 ## Errors
 
@@ -48,7 +48,7 @@ connection closes, and errors if the connection errors (observed as
 
     WebSocketServer.Connection.readable connection
         |> Stream.read
-        |> Task.attempt ReadResult
+        |> Task.andThen handleMessage
 
 -}
 readable : Connection -> Readable Message
@@ -67,7 +67,6 @@ frame or [`WebSocketServer.BinaryMessage`](WebSocketServer#Message) to send a
 binary frame.
 
     WebSocketServer.Connection.send connection (WebSocketServer.TextMessage "Hello!")
-        |> Task.attempt MessageSent
 
 -}
 send : Connection -> Message -> Task Error {}
@@ -87,7 +86,6 @@ send connection message =
 {-| Close a connection with a status code and reason string.
 
     WebSocketServer.Connection.close connection 1000 "Normal closure"
-        |> Task.attempt ConnectionClosed
 
 Valid close codes are 1000-1003, 1007-1014, and 3000-4999.
 The reason string must not exceed 123 bytes.
