@@ -3,6 +3,8 @@ module Terminal exposing
     , Configuration
     , Size
     , initialize
+    , Description
+    , describe
     --
     , setStdInRawMode
     , setProcessTitle
@@ -18,7 +20,7 @@ terminal is connected to this application.
 
 ## Initialization
 
-@docs Permission, Configuration, Size, initialize
+@docs Permission, Configuration, Size, initialize, Description, describe
 
 ## Commands
 
@@ -85,6 +87,42 @@ initialize =
             else
                 Nothing
         )
+
+
+{-| What the attached interactive terminal is like, without the permission to
+change it.
+-}
+type alias Description =
+    { colorDepth : Int
+    , columns : Int
+    , rows : Int
+    }
+
+
+{-| The attached interactive terminal's colour depth and size, or `Nothing` when
+there is none, as for [`initialize`](#initialize).
+
+This is what a library needs to format its output for the terminal it will be
+read in: a test runner choosing colours, or an argument parser wrapping its help
+text. It mints no [`Permission`](#Permission), so any module may ask, where only
+the application may call [`initialize`](#initialize) (geng-lang
+`m1b-source.md` D258, `m1b-test.md` D292).
+-}
+describe : Task x (Maybe Description)
+describe =
+    initWith (\isTTY colorDepth columns rows -> { isTTY = isTTY, colorDepth = colorDepth, columns = columns, rows = rows })
+        |> Task.map
+            (\raw ->
+                if raw.isTTY then
+                    Just
+                        { colorDepth = raw.colorDepth
+                        , columns = raw.columns
+                        , rows = raw.rows
+                        }
+
+                else
+                    Nothing
+            )
 
 
 -- COMMANDS
