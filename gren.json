@@ -1,7 +1,7 @@
 {
     "type": "package",
     "platform": "node",
-    "name": "gren-lang/node",
+    "name": "github.com/geng-language/node",
     "summary": "Run Gren on Node.js",
     "license": "BSD-3-Clause",
     "version": "6.1.3",
@@ -20,8 +20,7 @@
     ],
     "gren-version": "0.6.0 <= v < 0.7.0",
     "dependencies": {
-        "gren-lang/core": "7.0.0 <= v < 8.0.0",
-        "geng/stream": "0.1.0 <= v < 0.2.0",
-        "gren-lang/url": "6.0.0 <= v < 7.0.0"
+        "github.com/geng-language/stream": "0.1.0 <= v < 0.2.0",
+        "github.com/geng-language/url": "6.0.0 <= v < 7.0.0"
     }
 }
