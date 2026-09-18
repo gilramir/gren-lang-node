@@ -21,6 +21,7 @@ import Task exposing (Task)
 
 type Msg
     = GotRequest { request : Http.Request, response : Response }
+    | Stop
 
 
 main : Task Never {}
@@ -54,6 +55,9 @@ serve env fs server =
         |> Task.andThen
             (\requests ->
                 Http.onRequest server requests (\req res -> GotRequest { request = req, response = res })
+                    -- The test script stops the server with SIGTERM, and an
+                    -- exit is what lets node write its coverage (§TS9).
+                    |> Task.andThen (\_ -> Node.onSignalTerminate requests Stop)
                     |> Task.andThen (\_ -> Log.line env.stdout "Server started")
                     |> Task.andThen (\_ -> loop fs requests)
             )
@@ -68,6 +72,9 @@ loop fs requests =
                     Just (GotRequest { request, response }) ->
                         Process.spawn (respond fs request response)
                             |> Task.andThen (\_ -> loop fs requests)
+
+                    Just Stop ->
+                        Node.exit
 
                     Nothing ->
                         Task.succeed {}

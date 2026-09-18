@@ -21,6 +21,7 @@ import WebSocketServer.Connection as WsConn
 type Msg
     = ClientConnected WebSocketServer.Connection
     | ClientDisconnected WebSocketServer.Connection
+    | Stop
 
 
 main : Task Never {}
@@ -52,6 +53,9 @@ serve env port_ server =
             (\events ->
                 WebSocketServer.onConnection server events ClientConnected
                     |> Task.andThen (\_ -> WebSocketServer.onClose server events (\conn _ -> ClientDisconnected conn))
+                    -- The test script stops the server with SIGTERM, and an
+                    -- exit is what lets node write its coverage.
+                    |> Task.andThen (\_ -> Node.onSignalTerminate events Stop)
                     |> Task.andThen (\_ -> Stream.Log.line env.stdout ("WebSocket server started on port " ++ String.fromInt port_))
                     |> Task.andThen (\_ -> loop env events)
             )
@@ -69,6 +73,9 @@ loop env events =
 
                     Just (ClientDisconnected _) ->
                         loop env events
+
+                    Just Stop ->
+                        Node.exit
 
                     Nothing ->
                         Task.succeed {}
