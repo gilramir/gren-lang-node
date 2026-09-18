@@ -1,79 +1,109 @@
-import request from "supertest";
+// Upstream's requests, on node's own `fetch` and `node:test` rather than
+// supertest and mocha, so that nothing needs installing. The server is started
+// here, on a free port, and stopped when the file's tests are done.
 import * as assert from "node:assert";
+import { spawn } from "node:child_process";
+import * as net from "node:net";
+import * as path from "node:path";
+import { after, before, describe, it } from "node:test";
 
-const url = "http://localhost:3000";
+const here = path.resolve(import.meta.dirname, "..");
+let server;
+let url;
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+before(async () => {
+  const port = await freePort();
+  url = `http://localhost:${port}`;
+  server = spawn(process.execPath, [path.join(here, "app"), String(port)], { cwd: here });
+  await new Promise((resolve, reject) => {
+    let out = "";
+    server.stdout.on("data", (d) => {
+      out += d.toString();
+      if (out.includes("Server started")) resolve();
+    });
+    server.on("exit", (code) => reject(new Error(`app exited ${code} before it started`)));
+  });
+});
+
+after(() => server.kill());
 
 describe("Requests", () => {
   it("responding with custom body", async () => {
-    const res1 = await request(url).get("/");
-
+    const res1 = await fetch(`${url}/`);
     assert.equal(res1.status, 200);
-    assert.equal(res1.text, "Welcome!");
+    assert.equal(await res1.text(), "Welcome!");
 
-    const res2 = await request(url).get("/hello");
-
+    const res2 = await fetch(`${url}/hello`);
     assert.equal(res2.status, 200);
-    assert.equal(res2.text, "Hello to you too!");
+    assert.equal(await res2.text(), "Hello to you too!");
   });
 
   it("responding with custom status", async () => {
-    const res1 = await request(url).get("/");
+    const res1 = await fetch(`${url}/`);
     assert.equal(res1.status, 200);
 
-    const res2 = await request(url).get("/not/found");
+    const res2 = await fetch(`${url}/not/found`);
     assert.equal(res2.status, 404);
   });
 
   it("setting custom headers", async () => {
-    const res = await request(url).get("/");
-    const headerValue = res.headers["x-custom-header"];
-    assert.equal(headerValue, "hey there");
+    const res = await fetch(`${url}/`);
+    assert.equal(res.headers.get("x-custom-header"), "hey there");
   });
 
   it("responding to non-GET requests", async () => {
-    const res1 = await request(url).post("/").send("some data");
-    assert.equal(res1.headers["content-type"], "text/html");
-    assert.equal(res1.text, "You posted: some data");
+    const res1 = await fetch(`${url}/`, { method: "POST", body: "some data" });
+    assert.equal(res1.headers.get("content-type"), "text/html");
+    assert.equal(await res1.text(), "You posted: some data");
 
-    const res2 = await request(url).put("/howdy");
-    assert.equal(res2.headers["content-type"], "text/html");
-    assert.equal(res2.text, "Not found: PUT http://localhost:3000/howdy");
+    const res2 = await fetch(`${url}/howdy`, { method: "PUT" });
+    assert.equal(res2.headers.get("content-type"), "text/html");
+    assert.equal(await res2.text(), `Not found: PUT ${url}/howdy`);
   });
 
-  // Can't actually test this because node:http doesn't support custom methods.
-  // See https://github.com/nodejs/node-v0.x-archive/issues/3192
+  // Can't actually test an unknown method, because node:http doesn't support
+  // custom methods. See https://github.com/nodejs/node-v0.x-archive/issues/3192
   // and https://github.com/nodejs/http-parser/issues/309
-  // test("unknown http method", async ({ request }) => {
-  //   let response = await request.fetch("/hello", { method: "FAKE" });
-  //   await expect(await response.text()).toContain("UNKNOWN(FAKE) /howdy");
-  // });
 
   it("handling json", async () => {
-    const response = await request(url).post("/name").send({ name: "Jane" });
-    assert.equal(response.text, "Hello, Jane");
+    const res = await fetch(`${url}/name`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Jane" }),
+    });
+    assert.equal(await res.text(), "Hello, Jane");
   });
 
   it("responding to stream requests", async () => {
-    const response = await request(url)
-      .post("/")
-      .field("test.txt", Buffer.from("abc123"), { mimeType: "text/plain" });
-
-    assert.equal(response.status, 200);
-    assert.match(response.text, /test.txt/);
-    assert.match(response.text, /abc123/);
+    const form = new FormData();
+    form.append("test.txt", new Blob([Buffer.from("abc123")], { type: "text/plain" }), "test.txt");
+    const res = await fetch(`${url}/`, { method: "POST", body: form });
+    assert.equal(res.status, 200);
+    const text = await res.text();
+    assert.match(text, /test.txt/);
+    assert.match(text, /abc123/);
   });
 
   it("handling unicode", async () => {
-    const response = await request(url).post("/").send("snow ❄ flake");
-
-    assert.equal(response.headers["content-type"], "text/html");
-    assert.equal(response.text, "You posted: snow ❄ flake");
+    const res = await fetch(`${url}/`, { method: "POST", body: "snow ❄ flake" });
+    assert.equal(res.headers.get("content-type"), "text/html");
+    assert.equal(await res.text(), "You posted: snow ❄ flake");
   });
 
   it("responding with bytes", async () => {
-    const response = await request(url).get("/george.jpeg");
-
-    assert.equal(response.status, 200);
-    assert.equal(response.headers["content-type"], "image/jpeg");
+    const res = await fetch(`${url}/george.jpeg`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "image/jpeg");
   });
 });

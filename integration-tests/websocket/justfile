@@ -3,7 +3,7 @@ test: build
 
 build:
 	npm install
-	gren make --optimize Main --output=app
+	geng make --optimize Main --output=app
 
 clean:
 	rm -rf .gren

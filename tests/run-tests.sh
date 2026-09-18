@@ -1,3 +1,4 @@
 set -e
 
-gren run Main
+geng make Main --output=app
+node app

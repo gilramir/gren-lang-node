@@ -2,10 +2,8 @@ test: build
 	npm test
 
 build:
-	npm install
-	gren make --optimize Main --output=bin/app
+	geng make --optimize Main --output=bin/app
 
 clean:
 	rm -rf .gren
-	rm -rf node_modules
 	rm bin/app

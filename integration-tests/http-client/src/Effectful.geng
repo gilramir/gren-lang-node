@@ -1,0 +1,102 @@
+module Effectful exposing (Check, Suite, await, awaitError, concat, describe, run, test)
+
+{-| Tests whose subject is a task: run it, then check what it answered.
+
+Upstream wrote this suite on `blaix/gren-effectful-tests`, which is not ported,
+and this is the part of it the suite used. Each check is printed as a line,
+`ok NAME` or `not ok NAME -- WHY`, and `run` sets exit code 1 if any failed; the
+`node --test` script in `test/` reads the lines, one test each.
+-}
+
+import Expect exposing (Expectation)
+import Node
+import Stream.Log as Log
+import Task exposing (Task)
+import Test.Runner
+
+
+type alias Outcome =
+    { name : String
+    , failure : Maybe String
+    }
+
+
+type alias Suite =
+    Task Never (Array Outcome)
+
+
+type alias Check =
+    { name : String
+    , expectation : {} -> Expectation
+    }
+
+
+test : String -> ({} -> Expectation) -> Check
+test name expectation =
+    { name = name, expectation = expectation }
+
+
+{-| Run the task, and check what it succeeded with. A failure is a failed check. -}
+await : Inspect e => String -> Task e a -> (a -> Check) -> Suite
+await name task check =
+    task
+        |> Task.map (\value -> judge name (check value))
+        |> Task.onError (\err -> Task.succeed [ { name = name, failure = Just ("the task failed: " ++ inspect err) } ])
+
+
+{-| Run the task, and check what it failed with. A success is a failed check. -}
+awaitError : String -> Task e a -> (e -> Check) -> Suite
+awaitError name task check =
+    task
+        |> Task.map (\_ -> [ { name = name, failure = Just "the task succeeded" } ])
+        |> Task.onError (\err -> Task.succeed (judge name (check err)))
+
+
+judge : String -> Check -> Array Outcome
+judge prefix check =
+    [ { name = prefix ++ ", " ++ check.name
+      , failure =
+            Test.Runner.getFailureReason (check.expectation {})
+                |> Maybe.map (\f -> f.description ++ " " ++ inspect f.reason)
+      }
+    ]
+
+
+describe : String -> Array Suite -> Suite
+describe prefix suites =
+    concat suites
+        |> Task.map (Array.map (\o -> { o | name = prefix ++ ": " ++ o.name }))
+
+
+{-| One after the other, so that the server sees one request at a time. -}
+concat : Array Suite -> Suite
+concat suites =
+    Task.sequence suites
+        |> Task.map Array.flatten
+
+
+run : Node.Environment -> Suite -> Task Never {}
+run env suite =
+    suite
+        |> Task.andThen
+            (\outcomes ->
+                outcomes
+                    |> Array.map
+                        (\o ->
+                            when o.failure is
+                                Nothing ->
+                                    Log.line env.stdout ("ok " ++ o.name)
+
+                                Just why ->
+                                    Log.line env.stdout ("not ok " ++ o.name ++ " -- " ++ why)
+                        )
+                    |> Task.sequence
+                    |> Task.andThen
+                        (\_ ->
+                            if Array.any (\o -> o.failure /= Nothing) outcomes then
+                                Node.setExitCode 1
+
+                            else
+                                Task.succeed {}
+                        )
+            )

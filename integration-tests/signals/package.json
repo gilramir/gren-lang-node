@@ -1,10 +1,5 @@
 {
   "scripts": {
-    "test": "mocha"
-  },
-  "dependencies": {
-    "clet": "^1.0.1",
-    "mocha": "^10.2.0",
-    "mockttp": "^3.10.0"
+    "test": "node --test test/requests.mjs"
   }
 }

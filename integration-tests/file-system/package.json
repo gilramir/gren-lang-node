@@ -1,8 +1,5 @@
 {
   "scripts": {
-    "test": "mocha"
-  },
-  "devDependencies": {
-    "mocha": "^10.2.0"
+    "test": "node --test test/requests.mjs"
   }
 }

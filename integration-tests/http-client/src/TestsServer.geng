@@ -1,0 +1,107 @@
+module TestsServer exposing (main)
+
+{-| The server `Tests` sends its requests to. It listens on the port given as
+its argument, says `Server started` once it is listening, and answers each
+request in a process of its own, so that `/slow` holds up nothing else.
+-}
+
+import Bytes exposing (Bytes)
+import HttpServer as Http exposing (Method(..), ServerError(..))
+import HttpServer.Response as Response exposing (Response)
+import Json.Encode as Encode
+import Node exposing (Environment)
+import Process
+import Source exposing (Source)
+import Stream
+import Stream.Log as Log
+import Task exposing (Task)
+
+
+{-| The test suite calls these handlers to make assertions on.
+-}
+handler : Http.Request -> Response -> Task x {}
+handler req res =
+    when { method = req.method, path = req.url.path } is
+        { method = _, path = "/hello" } ->
+            res
+                |> Response.setBody "Hello!"
+                |> Response.send
+
+        { method = POST, path = "/echo" } ->
+            res
+                |> Response.setBodyAsBytes req.body
+                |> Response.send
+
+        { method = GET, path = "/slow" } ->
+            Process.sleep 1000
+                |> Task.andThen (\_ -> Response.send res)
+
+        { method = GET, path = "/headers" } ->
+            res
+                |> Response.setBody
+                    (req.headers
+                        |> Encode.dict identity Encode.string
+                        |> Encode.encode 2
+                    )
+                |> Response.send
+
+        _ ->
+            res
+                |> Response.setStatus 404
+                |> Response.setBody "Not found"
+                |> Response.send
+
+
+-- Server program
+
+
+type Msg
+    = GotRequest { request : Http.Request, response : Response }
+
+
+main : Task Never {}
+main =
+    Node.getEnvironment
+        |> Task.andThen
+            (\env ->
+                when Array.get 2 env.args |> Maybe.andThen String.toInt is
+                    Just port_ ->
+                        Http.initialize
+                            |> Task.andThen (\permission -> Http.createServer permission { host = "127.0.0.1", port_ = port_ })
+                            |> Task.andThen (serve env)
+                            |> Task.onError
+                                (\(ServerError { code, message }) ->
+                                    Log.line env.stderr ("Server failed to start: " ++ code ++ "\n" ++ message)
+                                        |> Task.andThen (\_ -> Node.setExitCode 1)
+                                )
+
+                    Nothing ->
+                        Log.line env.stderr "usage: server-app PORT"
+                            |> Task.andThen (\_ -> Node.setExitCode 1)
+            )
+
+
+serve : Environment -> Http.Server -> Task x {}
+serve env server =
+    Source.new
+        |> Task.andThen
+            (\requests ->
+                Http.onRequest server requests (\req res -> GotRequest { request = req, response = res })
+                    |> Task.andThen (\_ -> Log.line env.stdout "Server started")
+                    |> Task.andThen (\_ -> loop requests)
+            )
+
+
+loop : Source Msg -> Task x {}
+loop requests =
+    Source.next requests
+        |> Task.andThen
+            (\msg ->
+                when msg is
+                    Just (GotRequest { request, response }) ->
+                        Process.spawn (handler request response)
+                            |> Task.andThen (\_ -> loop requests)
+
+                    Nothing ->
+                        Task.succeed {}
+            )

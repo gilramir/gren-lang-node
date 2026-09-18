@@ -1,0 +1,149 @@
+module Main exposing (main)
+
+{-| The server `test/requests.mjs` sends its requests to. It listens on the port
+given as its argument, says `Server started` once it is listening, and answers
+each request in a process of its own.
+-}
+
+import Bytes exposing (Bytes)
+import Dict
+import FileSystem
+import FileSystem.Path as Path
+import HttpServer as Http exposing (Method(..), ServerError(..))
+import HttpServer.Response as Response exposing (Response)
+import Json.Decode as Decode
+import Node exposing (Environment)
+import Process
+import Source exposing (Source)
+import Stream.Log as Log
+import Task exposing (Task)
+
+
+type Msg
+    = GotRequest { request : Http.Request, response : Response }
+
+
+main : Task Never {}
+main =
+    Node.getEnvironment
+        |> Task.andThen
+            (\env ->
+                when Array.get 2 env.args |> Maybe.andThen String.toInt is
+                    Just port_ ->
+                        Task.map2 (\fs http -> { fs = fs, http = http }) FileSystem.initialize Http.initialize
+                            |> Task.andThen
+                                (\permissions ->
+                                    Http.createServer permissions.http { host = "127.0.0.1", port_ = port_ }
+                                        |> Task.andThen (serve env permissions.fs)
+                                )
+                            |> Task.onError
+                                (\(ServerError { code, message }) ->
+                                    Log.line env.stderr ("Server failed to start: " ++ code ++ "\n" ++ message)
+                                        |> Task.andThen (\_ -> Node.setExitCode 1)
+                                )
+
+                    Nothing ->
+                        Log.line env.stderr "usage: app PORT"
+                            |> Task.andThen (\_ -> Node.setExitCode 1)
+            )
+
+
+serve : Environment -> FileSystem.Permission -> Http.Server -> Task x {}
+serve env fs server =
+    Source.new
+        |> Task.andThen
+            (\requests ->
+                Http.onRequest server requests (\req res -> GotRequest { request = req, response = res })
+                    |> Task.andThen (\_ -> Log.line env.stdout "Server started")
+                    |> Task.andThen (\_ -> loop fs requests)
+            )
+
+
+loop : FileSystem.Permission -> Source Msg -> Task x {}
+loop fs requests =
+    Source.next requests
+        |> Task.andThen
+            (\msg ->
+                when msg is
+                    Just (GotRequest { request, response }) ->
+                        Process.spawn (respond fs request response)
+                            |> Task.andThen (\_ -> loop fs requests)
+
+                    Nothing ->
+                        Task.succeed {}
+            )
+
+
+respond : FileSystem.Permission -> Http.Request -> Response -> Task x {}
+respond fs req res =
+    if req.url.path == "/george.jpeg" then
+        FileSystem.readFile fs (Path.fromPosixString "./public/george.jpeg")
+            |> Task.andThen
+                (\bytes ->
+                    res
+                        |> Response.setHeader "Content-Type" "image/jpeg"
+                        |> Response.setStatus 200
+                        |> Response.setBodyAsBytes bytes
+                        |> Response.send
+                )
+            |> Task.onError
+                (\_ ->
+                    res
+                        |> Response.setHeader "Content-Type" "text/plain"
+                        |> Response.setStatus 404
+                        |> Response.setBody "Not found"
+                        |> Response.send
+                )
+
+    else
+        htmlResponse req res
+
+
+htmlResponse : Http.Request -> Response -> Task x {}
+htmlResponse req res =
+    let
+        { body, status } =
+            when { method = req.method, path = req.url.path } is
+                { method = GET, path = "/" } ->
+                    { body = "Welcome!"
+                    , status = 200
+                    }
+
+                { method = GET, path = "/hello" } ->
+                    { body = "Hello to you too!"
+                    , status = 200
+                    }
+
+                { method = POST, path = "/name" } ->
+                    { body =
+                        "Hello, "
+                            ++ (req
+                                    |> Http.bodyFromJson (Decode.dict Decode.string)
+                                    |> Result.withDefault Dict.empty
+                                    |> Dict.get "name"
+                                    |> Maybe.withDefault "Oops! Can't decode body."
+                               )
+                    , status = 200
+                    }
+
+                { method = POST } ->
+                    { body =
+                        "You posted: "
+                            ++ (req
+                                    |> Http.bodyAsString
+                                    |> Maybe.withDefault "Oops! Can't decode body."
+                               )
+                    , status = 200
+                    }
+
+                _ ->
+                    { body = "Not found: " ++ Http.requestInfo req
+                    , status = 404
+                    }
+    in
+    res
+        |> Response.setStatus status
+        |> Response.setHeader "Content-type" "text/html"
+        |> Response.setHeader "X-Custom-Header" "hey there"
+        |> Response.setBody body
+        |> Response.send

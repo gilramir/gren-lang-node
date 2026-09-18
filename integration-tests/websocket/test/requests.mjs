@@ -1,8 +1,54 @@
+// Upstream's tests on `node:test` rather than mocha. The server is started here,
+// on a free port, and stopped when the file's tests are done. `ws` is still
+// needed: the last test writes a malformed frame to the raw socket, which
+// node's own WebSocket client has no way to do.
 import WebSocket from "ws";
 import * as assert from "node:assert";
-import { getAppProcess } from "./fixtures.mjs";
+import { spawn } from "node:child_process";
+import * as net from "node:net";
+import * as path from "node:path";
+import { after, before, describe, it } from "node:test";
 
-const url = "ws://127.0.0.1:8085";
+const here = path.resolve(import.meta.dirname, "..");
+let proc;
+let url;
+
+function getAppProcess() {
+  return proc;
+}
+
+function freePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+
+before(async () => {
+  const port = await freePort();
+  url = `ws://127.0.0.1:${port}`;
+  proc = spawn(process.execPath, [path.join(here, "app"), String(port)], { cwd: here });
+  proc.stderr.resume();
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Server did not start within 5000ms")), 5000);
+    let out = "";
+    const onData = (data) => {
+      out += data.toString();
+      if (out.includes("WebSocket server started")) {
+        clearTimeout(timeout);
+        proc.stdout.off("data", onData);
+        resolve();
+      }
+    };
+    proc.stdout.on("data", onData);
+  });
+});
+
+after(() => proc.kill());
 
 // Buffer messages from the moment the WebSocket is created.
 // The WebSocket library can emit "message" in the same event-loop tick as "open"
@@ -90,8 +136,7 @@ function waitForStdoutLine(predicate, timeoutMs = 5000) {
   });
 }
 
-describe("WebSocket Server", function () {
-  this.timeout(10000);
+describe("WebSocket Server", { timeout: 10000 }, function () {
   it("sends welcome message on connection", async () => {
     const client = await connect();
     const msg = await waitForMessage(client);

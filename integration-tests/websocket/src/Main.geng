@@ -1,0 +1,115 @@
+module Main exposing (main)
+
+{-| The server `test/requests.mjs` connects to. It listens on the port given as
+its argument and says `WebSocket server started` once it is listening. Each
+connection is a process of its own, which sends `welcome` and then echoes what
+it reads, one message at a time, until the stream closes: `echo:` and the text,
+bytes as they came, and a close for `please-close`.
+-}
+
+import Bytes exposing (Bytes)
+import Node exposing (Environment)
+import Process
+import Source exposing (Source)
+import Stream
+import Stream.Log
+import Task exposing (Task)
+import WebSocketServer
+import WebSocketServer.Connection as WsConn
+
+
+type Msg
+    = ClientConnected WebSocketServer.Connection
+    | ClientDisconnected WebSocketServer.Connection
+
+
+main : Task Never {}
+main =
+    Node.getEnvironment
+        |> Task.andThen
+            (\env ->
+                when Array.get 2 env.args |> Maybe.andThen String.toInt is
+                    Just port_ ->
+                        WebSocketServer.initialize
+                            |> Task.andThen (\permission -> WebSocketServer.createServer permission { host = "127.0.0.1", port_ = port_ })
+                            |> Task.andThen (serve env port_)
+                            |> Task.onError
+                                (\(WebSocketServer.ServerError { code, message }) ->
+                                    Stream.Log.line env.stderr ("Server error: " ++ code ++ " " ++ message)
+                                        |> Task.andThen (\_ -> Node.setExitCode 1)
+                                )
+
+                    Nothing ->
+                        Stream.Log.line env.stderr "usage: app PORT"
+                            |> Task.andThen (\_ -> Node.setExitCode 1)
+            )
+
+
+serve : Environment -> Int -> WebSocketServer.Server -> Task x {}
+serve env port_ server =
+    Source.new
+        |> Task.andThen
+            (\events ->
+                WebSocketServer.onConnection server events ClientConnected
+                    |> Task.andThen (\_ -> WebSocketServer.onClose server events (\conn _ -> ClientDisconnected conn))
+                    |> Task.andThen (\_ -> Stream.Log.line env.stdout ("WebSocket server started on port " ++ String.fromInt port_))
+                    |> Task.andThen (\_ -> loop env events)
+            )
+
+
+loop : Environment -> Source Msg -> Task x {}
+loop env events =
+    Source.next events
+        |> Task.andThen
+            (\msg ->
+                when msg is
+                    Just (ClientConnected connection) ->
+                        Process.spawn (converse env connection)
+                            |> Task.andThen (\_ -> loop env events)
+
+                    Just (ClientDisconnected _) ->
+                        loop env events
+
+                    Nothing ->
+                        Task.succeed {}
+            )
+
+
+converse : Environment -> WebSocketServer.Connection -> Task x {}
+converse env connection =
+    WsConn.send connection (WebSocketServer.TextMessage "welcome")
+        |> Task.onError (\_ -> Task.succeed {})
+        |> Task.andThen (\_ -> echo env connection)
+
+
+{-| Read one message, answer it, and read the next: one read in flight per
+connection, so the echoes come back in the order the messages were sent.
+-}
+echo : Environment -> WebSocketServer.Connection -> Task x {}
+echo env connection =
+    Stream.read (WsConn.readable connection)
+        |> Task.map Ok
+        |> Task.onError (\err -> Task.succeed (Err err))
+        |> Task.andThen
+            (\result ->
+                when result is
+                    Ok (WebSocketServer.TextMessage "please-close") ->
+                        WsConn.close connection 1000 "server-initiated-close"
+                            |> Task.onError (\_ -> Task.succeed {})
+
+                    Ok (WebSocketServer.TextMessage text) ->
+                        WsConn.send connection (WebSocketServer.TextMessage ("echo:" ++ text))
+                            |> Task.onError (\_ -> Task.succeed {})
+                            |> Task.andThen (\_ -> echo env connection)
+
+                    Ok (WebSocketServer.BinaryMessage bytes) ->
+                        WsConn.send connection (WebSocketServer.BinaryMessage bytes)
+                            |> Task.onError (\_ -> Task.succeed {})
+                            |> Task.andThen (\_ -> echo env connection)
+
+                    Err (Stream.Cancelled reason) ->
+                        Stream.Log.line env.stdout ("stream error: " ++ reason)
+
+                    Err _ ->
+                        Task.succeed {}
+            )

@@ -1,0 +1,13 @@
+module Main exposing (main)
+
+import Task exposing (Task)
+import Test
+import Test.FileSystemPath as FileSystemPath
+import Test.Runner.Node exposing (run)
+
+
+main : Task Never {}
+main =
+    run <|
+        Test.describe "Gren Node Tests"
+            [ FileSystemPath.tests ]

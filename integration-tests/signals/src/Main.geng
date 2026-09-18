@@ -1,0 +1,75 @@
+module Main exposing (main)
+
+{-| A signal from outside the process, delivered into a `Source`
+(`Node.onSignalInterrupt`, `Node.onSignalTerminate`). With `SIGINT` or `SIGTERM`
+as its argument the program installs that listener, says `ready`, and waits;
+when the signal comes it says which and exits with 101 or 102. With `Done` it
+says so and ends, which is how a task main ends: when its task has.
+
+Upstream's version tested `Node.onEmptyEventLoop`, which went with the TEA
+programs (D249), and left these two as a TODO, since a process cannot be sent
+a signal from inside `clet`.
+-}
+
+import Node
+import Process
+import Source exposing (Source)
+import Stream.Log
+import Task exposing (Task)
+
+
+type Msg
+    = Interrupted
+    | Terminated
+
+
+main : Task Never {}
+main =
+    Node.getEnvironment
+        |> Task.andThen
+            (\env ->
+                when Array.get 2 env.args is
+                    Just "SIGINT" ->
+                        waitFor env (\signals -> Node.onSignalInterrupt signals Interrupted)
+
+                    Just "SIGTERM" ->
+                        waitFor env (\signals -> Node.onSignalTerminate signals Terminated)
+
+                    Just "Done" ->
+                        Stream.Log.line env.stdout "Done"
+
+                    _ ->
+                        Stream.Log.line env.stdout "Invalid start argument"
+                            |> Task.andThen (\_ -> Node.setExitCode 1)
+            )
+
+
+{-| A signal listener does not keep node running, any more than it does in
+JavaScript, so a program waiting on nothing but one is told that nothing still
+running can deliver the event it waits for (`m1b-bracket.md` §E18). The sleep
+is what keeps it alive, as upstream's did.
+-}
+waitFor : Node.Environment -> (Source Msg -> Task Never Node.Listener) -> Task Never {}
+waitFor env listen =
+    Source.new
+        |> Task.andThen
+            (\signals ->
+                listen signals
+                    |> Task.andThen (\_ -> Process.spawn (Process.sleep 60000))
+                    |> Task.andThen (\_ -> Stream.Log.line env.stdout "ready")
+                    |> Task.andThen (\_ -> Source.next signals)
+                    |> Task.andThen
+                        (\msg ->
+                            when msg is
+                                Just Interrupted ->
+                                    Stream.Log.line env.stdout "SIGINT"
+                                        |> Task.andThen (\_ -> Node.exitWithCode 101)
+
+                                Just Terminated ->
+                                    Stream.Log.line env.stdout "SIGTERM"
+                                        |> Task.andThen (\_ -> Node.exitWithCode 102)
+
+                                Nothing ->
+                                    Task.succeed {}
+                        )
+            )

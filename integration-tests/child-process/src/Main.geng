@@ -1,0 +1,55 @@
+module Main exposing (main)
+
+{-| `ChildProcess.run`, selected by the start argument: `node --version` with a
+shell and without one, and a program that does not exist.
+-}
+
+import ChildProcess
+import Node
+import Stream.Log
+import Task exposing (Task)
+
+
+main : Task Never {}
+main =
+    Node.getEnvironment
+        |> Task.andThen
+            (\env ->
+                ChildProcess.initialize
+                    |> Task.andThen
+                        (\cpPerm ->
+                            when Array.get 2 env.args is
+                                Just "Exec" ->
+                                    { ChildProcess.defaultRunOptions | shell = ChildProcess.NoShell }
+                                        |> ChildProcess.run cpPerm "node" [ "--version" ]
+                                        |> Task.andThen (\result -> Stream.Log.bytes env.stdout result.stdout)
+                                        |> Task.onError (\_ -> Node.setExitCode 1)
+
+                                Just "ExecShell" ->
+                                    { ChildProcess.defaultRunOptions | shell = ChildProcess.DefaultShell }
+                                        |> ChildProcess.run cpPerm "node" [ "--version" ]
+                                        |> Task.andThen (\result -> Stream.Log.bytes env.stdout result.stdout)
+                                        |> Task.onError (\_ -> Node.setExitCode 1)
+
+                                Just "NotFound" ->
+                                    { ChildProcess.defaultRunOptions | shell = ChildProcess.NoShell }
+                                        |> ChildProcess.run cpPerm "foobar3" []
+                                        |> Task.andThen (\result -> Stream.Log.bytes env.stdout result.stdout)
+                                        |> Task.onError
+                                            (\err ->
+                                                when err is
+                                                    ChildProcess.InitError inerr ->
+                                                        if inerr.errorCode == "ENOENT" then
+                                                            Stream.Log.line env.stdout "Process Not Found"
+
+                                                        else
+                                                            Stream.Log.line env.stdout inerr.errorCode
+
+                                                    ChildProcess.ProgramError _ ->
+                                                        Stream.Log.line env.stdout "Program Error"
+                                            )
+
+                                _ ->
+                                    Stream.Log.line env.stdout "Invalid start argument"
+                        )
+            )
