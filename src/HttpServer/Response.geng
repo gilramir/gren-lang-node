@@ -5,6 +5,7 @@ module HttpServer.Response exposing
     , setBodyAsBytes
     , setBodyAsString
     , setHeader
+    , appendHeader
     , setStatus
     )
 
@@ -20,7 +21,7 @@ gives you a `GotRequest` msg:
             |> Response.setBody ("<html>Hello there!</html>")
             |> Response.send
 
-@docs Response, send, setBody, setBodyAsBytes, setBodyAsString, setHeader, setStatus
+@docs Response, send, setBody, setBodyAsBytes, setBodyAsString, setHeader, appendHeader, setStatus
 
 -}
 
@@ -44,13 +45,32 @@ setStatus statusCode (Internal.Response.Response response) =
     Internal.Response.Response { response | status = statusCode }
 
 
-{-| Add a header key/value pair to a response.
+{-| Set a header on a response, replacing any values it already has. Header
+names are case-insensitive, so `"Content-Type"` and `"content-type"` are the
+same header.
 -}
 setHeader : String -> String -> Response -> Response
 setHeader key value (Internal.Response.Response response) =
     Internal.Response.Response
-        { response 
-            | headers = Dict.set key value response.headers
+        { response
+            | headers = Dict.set (String.toLower key) [ value ] response.headers
+        }
+
+
+{-| Add a value to a header, which is sent as a line of its own after the ones
+the header already has. This is how a response sets more than one cookie, since
+`set-cookie` lines cannot be joined. Header names are case-insensitive, as in
+[`setHeader`](#setHeader).
+-}
+appendHeader : String -> String -> Response -> Response
+appendHeader key value (Internal.Response.Response response) =
+    Internal.Response.Response
+        { response
+            | headers =
+                Dict.update
+                    (String.toLower key)
+                    (\values -> Just (Array.pushLast value (Maybe.withDefault [] values)))
+                    response.headers
         }
 
 
@@ -100,8 +120,8 @@ send (Internal.Response.Response response) =
 
 
 @extern(js, "HttpServer", "sendString")
-sendStringExtern : Handle -> Int -> Array String -> Array String -> String -> Task x {}
+sendStringExtern : Handle -> Int -> Array String -> Array (Array String) -> String -> Task x {}
 
 
 @extern(js, "HttpServer", "sendBytes")
-sendBytesExtern : Handle -> Int -> Array String -> Array String -> Bytes -> Task x {}
+sendBytesExtern : Handle -> Int -> Array String -> Array (Array String) -> Bytes -> Task x {}

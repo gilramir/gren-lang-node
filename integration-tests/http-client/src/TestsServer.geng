@@ -45,6 +45,24 @@ handler req res =
                     )
                 |> Response.send
 
+        { method = GET, path = "/multi-headers" } ->
+            res
+                |> Response.appendHeader "Set-Cookie" "lang=javascript"
+                |> Response.appendHeader "set-cookie" "type=text"
+                |> Response.appendHeader "dups" "dup1"
+                |> Response.appendHeader "dups" "dup2"
+                |> Response.appendHeader "unduped" "dup"
+                |> Response.setBody "Duplicated headers!"
+                |> Response.send
+
+        { method = GET, path = "/replaced-headers" } ->
+            res
+                |> Response.appendHeader "X-Replaced" "one"
+                |> Response.appendHeader "x-replaced" "two"
+                |> Response.setHeader "X-REPLACED" "three"
+                |> Response.setBody "Replaced headers!"
+                |> Response.send
+
         _ ->
             res
                 |> Response.setStatus 404

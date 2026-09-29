@@ -250,4 +250,37 @@ suite permission =
                                 ]
                     )
             )
+        , await "with duplicated response headers"
+            (HttpClient.get "/multi-headers"
+                |> HttpClient.expectAnything
+                |> send
+            )
+            (\res ->
+                test "receives a set-cookie per cookie, whatever case they were appended in"
+                    (\_ ->
+                        res.headers
+                            |> Expect.all
+                                [ headerValues "set-cookie" >> Expect.equal [ "lang=javascript", "type=text" ]
+                                , headerValues "dups" >> Expect.equal [ "dup1, dup2" ]
+                                , headerValues "unduped" >> Expect.equal [ "dup" ]
+                                ]
+                    )
+            )
+        , await "with a header set after it was appended to"
+            (HttpClient.get "/replaced-headers"
+                |> HttpClient.expectAnything
+                |> send
+            )
+            (\res ->
+                test "receives only the value it was set to"
+                    (\_ -> headerValues "x-replaced" res.headers |> Expect.equal [ "three" ])
+            )
         ]
+
+
+{-| A response header's values; `fetch` joins a repeated header with `", "`
+before `HttpClient` sees it, except `set-cookie`.
+-}
+headerValues : String -> Dict.Dict String (Array String) -> Array String
+headerValues name headers =
+    Dict.get name headers |> Maybe.withDefault []

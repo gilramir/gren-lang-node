@@ -61,7 +61,10 @@ function removeListener(handle, succeed, fail) {
 // RESPONDING
 
 // The task completes once the response is finished or can no longer be, so a
-// client that went away does not leave it outstanding.
+// client that went away does not leave it outstanding. Each header's values are
+// an array, which setHeader writes as a line per value; Response lowercases the
+// names, since setHeader matches them without case and a second spelling of
+// one would replace the first.
 function respond(response, status, keys, values, body, succeed) {
   response.statusCode = status;
   for (var i = 0; i < keys.length; i++) {

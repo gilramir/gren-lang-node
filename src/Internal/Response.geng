@@ -15,7 +15,7 @@ type Response =
     Response
         { key : Handle
         , status : Int
-        , headers : Dict String String
+        , headers : Dict String (Array String)
         , body : Body
         }
 
