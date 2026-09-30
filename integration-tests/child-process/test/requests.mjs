@@ -30,8 +30,24 @@ describe("ChildProcess", () => {
     assert.doesNotMatch(stderr, /DeprecationWarning/);
   });
 
+  it("No Shell, No Args", async () => {
+    const { code, stdout, stderr } = await run("ExecNoArgsNoShell");
+    assert.equal(code, 0, stderr);
+    assert.equal(stdout.trim(), "Working");
+  });
+
   it("Program not found", async () => {
     const { stdout } = await run("NotFound");
     assert.equal(stdout.trim(), "Process Not Found");
+  });
+
+  it("Timeout", async () => {
+    const { stdout } = await run("Timeout");
+    assert.equal(stdout.trim(), "Error: -1");
+  });
+
+  it("Max bytes", async () => {
+    const { stdout } = await run("MaxBytes");
+    assert.equal(stdout.trim(), "Error: -1");
   });
 });

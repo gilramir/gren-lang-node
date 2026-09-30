@@ -1,7 +1,9 @@
 module Main exposing (main)
 
 {-| `ChildProcess.run`, selected by the start argument: `node --version` with a
-shell and without one, and a program that does not exist.
+shell and without one, `true` with no arguments, a program that does not exist,
+and a program stopped by its run duration and by its output limit, whose exit
+code is -1.
 -}
 
 import ChildProcess
@@ -23,6 +25,12 @@ main =
                                     { ChildProcess.defaultRunOptions | shell = ChildProcess.NoShell }
                                         |> ChildProcess.run cpPerm "node" [ "--version" ]
                                         |> Task.andThen (\result -> Stream.Log.bytes env.stdout result.stdout)
+                                        |> Task.onError (\_ -> Node.setExitCode 1)
+
+                                Just "ExecNoArgsNoShell" ->
+                                    { ChildProcess.defaultRunOptions | shell = ChildProcess.NoShell }
+                                        |> ChildProcess.run cpPerm "true" []
+                                        |> Task.andThen (\_ -> Stream.Log.line env.stdout "Working")
                                         |> Task.onError (\_ -> Node.setExitCode 1)
 
                                 Just "ExecShell" ->
@@ -49,7 +57,35 @@ main =
                                                         Stream.Log.line env.stdout "Program Error"
                                             )
 
+                                Just "Timeout" ->
+                                    { ChildProcess.defaultRunOptions
+                                        | shell = ChildProcess.NoShell
+                                        , runDuration = ChildProcess.Milliseconds 100
+                                    }
+                                        |> ChildProcess.run cpPerm "sleep" [ "5" ]
+                                        |> Task.map (\_ -> {})
+                                        |> Task.onError (exitCodeOf env)
+
+                                Just "MaxBytes" ->
+                                    { ChildProcess.defaultRunOptions
+                                        | shell = ChildProcess.NoShell
+                                        , maximumBytesWrittenToStreams = 4
+                                    }
+                                        |> ChildProcess.run cpPerm "echo" [ "longer than four bytes" ]
+                                        |> Task.map (\_ -> {})
+                                        |> Task.onError (exitCodeOf env)
+
                                 _ ->
                                     Stream.Log.line env.stdout "Invalid start argument"
                         )
             )
+
+
+exitCodeOf : Node.Environment -> ChildProcess.FailedRun -> Task Never {}
+exitCodeOf env err =
+    when err is
+        ChildProcess.InitError inerr ->
+            Stream.Log.line env.stdout inerr.errorCode
+
+        ChildProcess.ProgramError perr ->
+            Stream.Log.line env.stdout ("Error: " ++ String.fromInt perr.exitCode)
